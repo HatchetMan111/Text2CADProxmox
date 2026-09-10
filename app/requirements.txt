@@ -1,0 +1,13 @@
+fastapi==0.115.*
+uvicorn[standard]==0.30.*
+httpx==0.27.*
+pydantic==2.*
+python-multipart==0.0.9
+# CAD-Stack aus earthtojake/text-to-cad (Skill: cad)
+cadgen[snapshot]==0.5.1
+build123d==0.10.*
+# DfAM / Mesh-Checks (3D-Druck-Optimierung)
+trimesh==4.*
+numpy==1.26.*
+# Snapshot-Fallback braucht Playwright nur optional:
+# python -m playwright install chromium  (wird im Installer versucht, kein Hard-Fail)

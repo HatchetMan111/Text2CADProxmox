@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>text2CAD — Text zu 3D-Druck</title>
+<style>
+:root{--bg:#0f1115;--card:#171b22;--line:#2a3140;--txt:#e8ecf3;--mut:#9aa4b5;--acc:#4da3ff;--ok:#3fb950;--err:#f85149}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.5 system-ui,Segoe UI,Roboto,Arial}
+header{padding:18px 22px;border-bottom:1px solid var(--line);display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+header h1{margin:0;font-size:22px}header small{color:var(--mut)}
+main{max-width:1180px;margin:0 auto;padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:980px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+label{display:block;margin:10px 0 4px;color:var(--mut);font-size:13px}
+input,select,textarea{width:100%;background:#0d1016;border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:10px}
+textarea{min-height:110px;resize:vertical}
+.row{display:flex;gap:8px}.row>*{flex:1}
+button{background:var(--acc);border:0;color:#fff;border-radius:8px;padding:10px 14px;font-weight:600;cursor:pointer}
+button.ghost{background:transparent;border:1px solid var(--line);color:var(--txt)}
+button:disabled{opacity:.5;cursor:wait}
+#bar{height:12px;background:#0d1016;border:1px solid var(--line);border-radius:99px;overflow:hidden;margin-top:8px}
+#bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc),#7cc4ff);transition:width .3s}
+#stage{color:var(--mut);font-size:13px;margin-top:6px}
+pre#logs{background:#0d1016;border:1px solid var(--line);border-radius:8px;padding:10px;max-height:300px;overflow:auto;white-space:pre-wrap;font-size:12px}
+#viewer{width:100%;height:380px;background:#0d1016;border:1px solid var(--line);border-radius:8px}
+.dl{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.dl a{border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--txt);text-decoration:none}
+.tag{font-size:12px;color:var(--mut)}
+details{margin-top:10px}summary{cursor:pointer;color:var(--mut)}
+.kv{font-size:13px;color:var(--mut)}
+.ok{color:var(--ok)}.err{color:var(--err)}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}
+</script>
+</head>
+<body>
+<header>
+<h1>text2CAD</h1>
+<small>Text → CAD (build123d/cadgen) → <b>STL / STEP / 3MF</b> für den 3D-Druck · LXC-lokal · OpenRouter + OmniRouter</small>
+</header>
+<main>
+<div class="card">
+<h3>1 · Provider &amp; Modell <span class="tag">(Dropdown)</span></h3>
+<label>Provider</label>
+<select id="provider">
+<option value="openrouter">OpenRouter (openrouter.ai)</option>
+<option value="omnirouter">OmniRouter (OpenAI-kompatibel)</option>
+<option value="custom">Custom (OpenAI-kompatibel, z. B. Ollama)</option>
+</select>
+<div class="row">
+<div><label>OpenRouter API-Key</label><input id="or_key" type="password" placeholder="sk-or-…" autocomplete="off"></div>
+<div><label>OmniRouter URL</label><input id="omni_url" placeholder="http://localhost:20128/v1"></div>
+</div>
+<label>OmniRouter / Custom Key (optional)</label>
+<input id="omni_key" type="password" placeholder="nur falls Gateway Key verlangt" autocomplete="off">
+<label>Custom Base-URL (nur Provider Custom)</label>
+<input id="custom_url" placeholder="http://192.168.x.x:11434/v1">
+<label>Modell <span class="tag" id="model_hint"></span></label>
+<div class="row"><select id="model" style="flex:3"></select><button class="ghost" id="reload" style="flex:1">↻ Modelle</button></div>
+<div class="kv" id="prov_hint"></div>
+<h3 style="margin-top:18px">2 · Bauteil beschreiben</h3>
+<label>Prompt (mm, FDM-gerecht formulieren)</label>
+<textarea id="prompt" placeholder="z. B. Handyhalter 80x20x60mm, 15° geneigt, 4mm Wand, Kabelschlitz 12mm, abgerundete Kanten…">Handyhalter 80mm breit, 20mm tief, 60mm hoch, 15 Grad geneigt, 4mm Wandstaerke, Kabelschlitz 12mm, Fasen statt scharfer Kanten</textarea>
+<div class="row">
+<div><label>Exporte</label><div>
+<label style="display:inline"><input type="checkbox" id="e_stl" checked style="width:auto"> STL (Druck)</label>
+<label style="display:inline;margin-left:10px"><input type="checkbox" id="e_step" checked style="width:auto"> STEP</label>
+<label style="display:inline;margin-left:10px"><input type="checkbox" id="e_3mf" checked style="width:auto"> 3MF</label>
+</div></div>
+<div><label>&nbsp;</label><label style="display:block"><input type="checkbox" id="snap" checked style="width:auto"> Snapshot rendern</label></div>
+</div>
+<div style="margin-top:12px" class="row"><button id="go" style="flex:2">⚙️ CAD berechnen</button><button class="ghost" id="save">Einstellungen speichern</button></div>
+<div id="bar"><i></i></div><div id="stage">Bereit.</div>
+</div>
+<div>
+<div class="card">
+<h3>3 · Vorschau &amp; Download</h3>
+<div id="viewer"></div>
+<div class="kv" id="meta">Noch kein Job.</div>
+<div class="dl" id="dls"></div>
+<details><summary>Beispiele</summary>
+<div class="kv">
+<button class="ghost" data-ex="Seifenschale 120x80x25mm, Ablaufloecher 6mm, 3mm Wand, abgerundete Ecken R8">Seifenschale</button>
+<button class="ghost" data-ex="Kabelhalter-Clip fuer 8mm Kabel, 30x20x15mm, Schnappnut, 2mm Wand">Kabelclip</button>
+<button class="ghost" data-ex="VESA-Adapter 100x100 auf 75x75, 5mm Platte, M4 Senkbohrungen">VESA-Adapter</button>
+<button class="ghost" data-ex="Lueftergitter 80x80x5mm, Waben 6mm, Rahmen 5mm, Ecken R4">Lüftergitter</button>
+</div></details>
+</div>
+<div class="card">
+<h3>Logs <span class="tag">(komplette Kette: LLM → Build → Export)</span></h3>
+<pre id="logs">—</pre>
+</div>
+</div>
+</main>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {STLLoader} from 'three/addons/loaders/STLLoader.js';
+
+const $=id=>document.getElementById(id);
+let poll=null, scene, camera, renderer, controls, mesh=null;
+
+function initViewer(){
+  const el=$('viewer');
+  scene=new THREE.Scene(); scene.background=new THREE.Color(0x0d1016);
+  camera=new THREE.PerspectiveCamera(45, el.clientWidth/el.clientHeight, .1, 5000);
+  camera.position.set(120,120,120);
+  renderer=new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(el.clientWidth, el.clientHeight);
+  el.innerHTML=''; el.appendChild(renderer.domElement);
+  controls=new OrbitControls(camera, renderer.domElement);
+  scene.add(new THREE.HemisphereLight(0xffffff,0x223344,1.1));
+  const d=new THREE.DirectionalLight(0xffffff,.9); d.position.set(200,200,200); scene.add(d);
+  const g=new THREE.GridHelper(200,20,0x2a3140,0x1a2030); scene.add(g);
+  (function anim(){requestAnimationFrame(anim); controls.update(); renderer.render(scene,camera);})();
+  window.addEventListener('resize',()=>{renderer.setSize(el.clientWidth,el.clientHeight); camera.aspect=el.clientWidth/el.clientHeight; camera.updateProjectionMatrix();});
+}
+function showSTL(url){
+  new STLLoader().load(url, geo=>{
+    geo.computeVertexNormals(); geo.center();
+    if(mesh){scene.remove(mesh); mesh.geometry.dispose();}
+    mesh=new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color:0x4da3ff, metalness:.15, roughness:.55}));
+    scene.add(mesh);
+    const box=new THREE.Box3().setFromObject(mesh); const s=box.getSize(new THREE.Vector3());
+    const m=Math.max(s.x,s.y,s.z)||100; camera.position.set(m,m,m); controls.target.set(0,0,0);
+  }, undefined, e=>{log('STL-Viewer Fehler: '+e);});
+}
+function log(t){const p=$('logs'); if(p.textContent==='—')p.textContent=''; p.textContent+=t+'\n'; p.scrollTop=p.scrollHeight;}
+
+async function loadSettings(){
+  try{const s=await (await fetch('/api/settings')).json();
+    if(s.omnirouter_url)$('omni_url').value=s.omnirouter_url;
+    if(s.default_provider)$('provider').value=s.default_provider;
+  }catch(e){}
+}
+async function loadModels(){
+  const p=$('provider').value;
+  $('model_hint').textContent='lade…'; $('prov_hint').textContent='';
+  const q=new URLSearchParams({provider:p});
+  if(p==='openrouter'&&$('or_key').value)q.set('api_key',$('or_key').value);
+  if(p==='omnirouter'){if($('omni_url').value)q.set('base_url',$('omni_url').value); if($('omni_key').value)q.set('api_key',$('omni_key').value);}
+  if(p==='custom'&&$('custom_url').value)q.set('base_url',$('custom_url').value);
+  try{
+    const r=await fetch('/api/models?'+q.toString()); const j=await r.json();
+    const sel=$('model'); sel.innerHTML='';
+    j.models.forEach(m=>{const o=document.createElement('option'); o.value=m.id; o.textContent=m.name||m.id; sel.appendChild(o);});
+    $('model_hint').textContent=j.fallback?'(Fallback-Liste — Key/Gateway prüfen)':`(${j.models.length} Modelle von ${j.base||p})`;
+    if(j.hint)$('prov_hint').textContent=j.hint;
+  }catch(e){$('model_hint').textContent='Fehler: '+e;}
+}
+async function save(){await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({openrouter_key:$('or_key').value,omnirouter_url:$('omni_url').value||'http://localhost:20128/v1',omnirouter_key:$('omni_key').value,default_provider:$('provider').value,default_model:$('model').value})}); log('Einstellungen gespeichert.');}
+
+$('reload').onclick=loadModels; $('provider').onchange=loadModels; $('save').onclick=save;
+document.querySelectorAll('[data-ex]').forEach(b=>b.onclick=()=>{$('prompt').value=b.dataset.ex;});
+$('go').onclick=async()=>{
+  const ex=[]; if($('e_stl').checked)ex.push('stl'); if($('e_step').checked)ex.push('step'); if($('e_3mf').checked)ex.push('3mf');
+  const body={prompt:$('prompt').value,provider:$('provider').value,model:$('model').value,api_key:$('provider').value==='openrouter'?$('or_key').value:$('omni_key').value,base_url:$('provider').value==='omnirouter'?$('omni_url').value:($('provider').value==='custom'?$('custom_url').value:''),exports:ex,want_snapshot:$('snap').checked};
+  if(!body.model){alert('Kein Modell gewählt — erst Modelle laden.');return;}
+  $('go').disabled=true; $('dls').innerHTML=''; $('logs').textContent='';
+  $('bar').firstElementChild.style.width='2%'; $('stage').textContent='Sende an LLM…';
+  const r=await fetch('/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(!r.ok){log('FEHLER '+r.status+': '+await r.text()); $('go').disabled=false; return;}
+  const {job_id}=await r.json(); log('Job '+job_id+' gestartet.');
+  clearInterval(poll);
+  poll=setInterval(async()=>{
+    const j=await (await fetch('/api/jobs/'+job_id)).json();
+    $('bar').firstElementChild.style.width=(j.progress||0)+'%'; $('stage').textContent=(j.progress||0)+'% — '+(j.stage||'');
+    if(j.logs){$('logs').textContent=j.logs.join('\n'); $('logs').scrollTop=1e9;}
+    if(j.status==='done'||j.status==='error'){
+      clearInterval(poll); $('go').disabled=false;
+      if(j.status==='done'){
+        $('meta').innerHTML=`Fertig: <b>${job_id}</b> · Modell <b>${j.model}</b> · BBox ${j.dfam?.bbox_mm||'—'} mm · watertight: <b>${j.dfam?.watertight??'—'}</b>`;
+        const d=$('dls'); d.innerHTML='';
+        for(const [k,f] of Object.entries(j.files||{})){
+          if(k==='png')continue;
+          const a=document.createElement('a'); a.href=`/download/${job_id}/${f}`; a.textContent='⬇ '+f; a.download=f; d.appendChild(a);
+        }
+        if(j.files?.png){const a=document.createElement('a'); a.href=`/download/${job_id}/${j.files.png}`; a.textContent='⬇ Vorschau-PNG'; a.target='_blank'; d.appendChild(a);}
+        const code=document.createElement('a'); code.href=`/download/${job_id}/model.py`; code.textContent='⬇ model.py'; d.appendChild(code);
+        if(j.files?.stl)showSTL(`/download/${job_id}/${j.files.stl}`);
+        if(j.dfam?.hints)log('DfAM:\n- '+j.dfam.hints.join('\n- '));
+      }else{$('stage').innerHTML='<span class="err">FEHLER — siehe Logs (komplette Kette).</span>';}
+    }
+  },1200);
+};
+initViewer(); loadSettings().then(loadModels);
+</script>
+</body>
+</html>
