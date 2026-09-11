@@ -78,8 +78,9 @@ guest_exists(){
 ct_exists(){ guest_exists "$1"; }  # Alias (Rueckwaertskompatibilitaet)
 hostname_taken(){
   {
-    pct list 2>/dev/null | awk 'NR>1{print $3}';
-    if command -v qm >/dev/null 2>&1; then qm list 2>/dev/null | awk 'NR>1{print $2}'; fi
+    # Name ist die LETZTE Spalte (haelt auch bei gefuellter Lock-Spalte)
+    pct list 2>/dev/null | awk 'NR>1 && NF{print $NF}';
+    if command -v qm >/dev/null 2>&1; then qm list 2>/dev/null | awk 'NR>1 && NF{print $2}'; fi
   } | grep -qx "$1"
 }
 
@@ -228,7 +229,7 @@ node --version && echo "[CT] Node OK."
 mkdir -p /opt/text2cad/app /opt/text2cad/data
 if [[ -d /opt/text2cad-src/.git ]]; then
   echo "[CT] Update bestehendes Repo …"
-  git -C /opt/text2cad-src pull --ff-only || git -C /opt/text2cad-src fetch origin "\${GITHUB_BRANCH}" && git -C /opt/text2cad-src reset --hard "origin/\${GITHUB_BRANCH}"
+  git -C /opt/text2cad-src pull --ff-only || { git -C /opt/text2cad-src fetch origin "\${GITHUB_BRANCH}" && git -C /opt/text2cad-src reset --hard "origin/\${GITHUB_BRANCH}"; }
 else
   rm -rf /opt/text2cad-src
   if [[ "\${GITHUB_REPO}" == *"USER/REPO"* ]]; then

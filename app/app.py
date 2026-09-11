@@ -109,6 +109,8 @@ FORBIDDEN_RE = re.compile(
     re.IGNORECASE,
 )
 
+JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
 app = FastAPI(title="text2CAD", version="1.0.0")
 
 # ---------------------------------------------------------------- Models
@@ -151,9 +153,19 @@ def load_settings() -> dict:
 
 def save_settings(data: dict) -> None:
     SETTINGS_FILE.write_text(json.dumps(data, indent=2))
+    try:
+        os.chmod(SETTINGS_FILE, 0o600)
+    except OSError:
+        pass
+
+
+def valid_job_id(job_id: str) -> bool:
+    return bool(JOB_ID_RE.fullmatch(job_id or ""))
 
 
 def job_dir(job_id: str) -> Path:
+    if not valid_job_id(job_id):
+        raise ValueError(f"Ungültige Job-ID: {job_id!r}")
     d = JOBS_DIR / job_id
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -221,19 +233,51 @@ def sanitize_code(code: str) -> str:
     except SyntaxError as e:
         raise ValueError(f"Kein gültiges Python (SyntaxError Zeile {e.lineno}: {e.msg}) — verworfen.") from e
     if "__main__" not in code:
-        code += '\n\nif __name__ == "__main__":\n    part()\n'
+        # Decoratierte Modellfunktion finden (nicht hart "part" annehmen).
+        m = re.search(
+            r"@(?:step|stl|threemf)[^\n]*\n(?:@(?:step|stl|threemf)[^\n]*\n)*def\s+([A-Za-z_]\w*)\s*\(\s*\)",
+            code,
+        )
+        fn = m.group(1) if m else None
+        if not fn:
+            raise ValueError(
+                "Keine parameterlose Modellfunktion mit @step/@stl gefunden — verworfen."
+            )
+        code += f'\n\nif __name__ == "__main__":\n    {fn}()\n'
     return code
 
 
 def ensure_exports(code: str, exports: list[str]) -> str:
-    """Stellt sicher, dass gewünschte Decoratoren vorhanden sind."""
+    """Stellt sicher, dass gewünschte Decoratoren + Imports vorhanden sind."""
     wants_3mf = "3mf" in [e.lower() for e in exports]
-    if wants_3mf and "threemf" not in code:
-        code = code.replace("from cadgen import step, stl", "from cadgen import step, stl, threemf")
-        if "from cadgen import step, stl, threemf" not in code and "from cadgen import" in code:
-            # generisch ergänzen
-            code = code.replace("from cadgen import", "from cadgen import threemf,", 1) if "threemf" not in code else code
-        code = code.replace("@step\n@stl", "@step\n@stl\n@threemf").replace("@stl\n@step", "@stl\n@threemf\n@step")
+    if not wants_3mf:
+        return code
+
+    # Import sicherstellen: bevorzugt "from cadgen import ..." um threemf ergänzen,
+    # sonst einen sauberen separaten Import ergänzen (nie bestehenden Import-String
+    # kaputtschreiben — frühere replace()-Logik erzeugte ungültige Syntax).
+    if "threemf" not in code:
+        m = re.search(r"from\s+cadgen\s+import\s+([^\n]+)", code)
+        if m:
+            names = [n.strip() for n in m.group(1).split(",")]
+            if "threemf" not in names:
+                names.append("threemf")
+            code = code[:m.start()] + "from cadgen import " + ", ".join(names) + code[m.end():]
+        elif "from cadgen import build123d" in code:
+            code = code.replace("from cadgen import build123d", "from cadgen import threemf\nfrom cadgen import build123d", 1)
+        else:
+            code = "from cadgen import threemf\n" + code
+
+    # Decorator ergänzen (nur wenn noch keiner vorhanden).
+    if "@threemf" not in code:
+        if re.search(r"@step\s*\n\s*@stl", code):
+            code = re.sub(r"(@step\s*\n\s*@stl)", r"\1\n@threemf", code, count=1)
+        elif re.search(r"@stl\s*\n\s*@step", code):
+            code = re.sub(r"(@stl\s*\n\s*@step)", r"\1\n@threemf", code, count=1)
+        elif "@step" in code:
+            code = code.replace("@step", "@step\n@threemf", 1)
+        elif "@stl" in code:
+            code = code.replace("@stl", "@stl\n@threemf", 1)
     return code
 
 
@@ -452,7 +496,7 @@ def build_user_prompt(prompt: str, parent_job: str, job: dict) -> str:
     parent = (parent_job or "").strip()
     if not parent:
         return f"Erzeuge ein druckbares 3D-Teil (mm) für: {prompt}\nHalte dich strikt an das Ausgabeformat."
-    if ".." in parent or "/" in parent:
+    if ".." in parent or "/" in parent or not valid_job_id(parent):
         raise RuntimeError(f"Ungültige parent_job-ID: {parent}")
     pm = JOBS_DIR / parent / "model.py"
     if not pm.exists():
@@ -601,8 +645,6 @@ async def run_job(job_id: str, req_data: dict) -> None:
         job["status"] = "done"
         job["finished_at"] = datetime.now().isoformat()
         persist_job(job)
-    except HTTPException:
-        raise
     except Exception as e:
         job["status"] = "error"
         # KOMPLETTE Fehlerkette (niemals nur letzte Zeile)
@@ -714,6 +756,8 @@ async def generate(req: GenerateRequest, bg: BackgroundTasks):
 
 @app.get("/api/jobs/{job_id}")
 def job_status(job_id: str):
+    if not valid_job_id(job_id):
+        raise HTTPException(400, f"Ungültige Job-ID: {job_id}")
     job = JOBS.get(job_id)
     if not job:
         # von Platte laden (nach Restart)
@@ -732,23 +776,28 @@ def job_status(job_id: str):
 @app.get("/api/jobs")
 def jobs_list():
     out = []
-    for p in sorted(JOBS_DIR.iterdir(), reverse=True)[:30]:
+    for p in JOBS_DIR.iterdir():
+        if not p.is_dir():
+            continue
         f = p / "job.json"
         if f.exists():
             try:
                 out.append(json.loads(f.read_text()))
             except Exception:
                 pass
-    # Memory-Jobs mergen
+    # Memory-Jobs mergen (Platte kann hinterherhinken)
+    known = {o.get("id") for o in out}
     for jid, j in JOBS.items():
-        if not any(o.get("id") == jid for o in out):
+        if jid not in known:
             out.append(j)
+    # Neueste zuerst (created_at, Fallback id) — nicht nach Hex-Ordnernamen.
+    out.sort(key=lambda o: (o.get("created_at") or "", o.get("id") or ""), reverse=True)
     return out[:30]
 
 
 @app.delete("/api/jobs/{job_id}")
 def job_delete(job_id: str):
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", job_id or ""):
+    if not valid_job_id(job_id):
         raise HTTPException(400, f"Ungültige Job-ID: {job_id}")
     d = JOBS_DIR / job_id
     if not d.exists() or not d.is_dir():
@@ -763,8 +812,10 @@ def job_delete(job_id: str):
 
 @app.get("/download/{job_id}/{fname}")
 def download(job_id: str, fname: str):
-    # Path-Traversal-Schutz
-    if ".." in fname or "/" in fname:
+    # Path-Traversal-Schutz (Job-ID + Dateiname)
+    if not valid_job_id(job_id):
+        raise HTTPException(400, "Ungültige Job-ID.")
+    if ".." in fname or "/" in fname or "\\" in fname:
         raise HTTPException(400, "Ungültiger Dateiname.")
     f = (JOBS_DIR / job_id / fname)
     if not f.exists() or not f.is_file():
