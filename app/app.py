@@ -115,6 +115,7 @@ class Settings(BaseModel):
     openrouter_key: str = ""
     omnirouter_url: str = OMNIROUTER_BASE_DEFAULT
     omnirouter_key: str = ""
+    omnirouter_auth: str = "auto"  # auto | bearer | x-api-key | query (manche Gateways wollen kein Bearer)
     custom_url: str = ""
     custom_key: str = ""
     default_provider: str = "openrouter"
@@ -260,15 +261,65 @@ def _message_text(msg: dict) -> str:
     return ""
 
 
-async def llm_generate(base_url: str, api_key: str, model: str, user_content: str, job: dict) -> str:
+AUTH_ORDER = ("bearer", "x-api-key", "query")  # manche OmniRouter-Varianten wollen kein Bearer
+
+
+def _real_headers(key: str, mode: str) -> tuple[dict, dict]:
+    """(headers, params) für ein Auth-Schema. Key nur hier, nie in Logs."""
+    if mode == "bearer":
+        return {"Authorization": f"Bearer {key}"}, {}
+    if mode == "x-api-key":
+        return {"X-API-Key": key}, {}
+    if mode == "query":
+        return {}, {"api_key": key}
+    return {}, {}
+
+
+async def gateway_request(method: str, base_url: str, path: str, key: str, auth: str,
+                          timeout: int, json_body: dict | None = None,
+                          extra_headers: dict | None = None) -> tuple[httpx.Response, str]:
+    """OpenAI-kompatibler Request mit Auth-Fallback. Gibt (Response, genutzter Modus) zurück.
+
+    Bei 401 werden weitere Schemata probiert; scheitern alle, kommt die komplette
+    Versuchs-Kette (ohne Key!) plus Diagnose-Hinweise.
+    """
+    url = base_url.rstrip("/") + path
+    modes = [auth] if auth in ("bearer", "x-api-key", "query") else list(AUTH_ORDER)
+    if not key:
+        modes = ["none"]
+    tried: list[str] = []
+    last_body = ""
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            for mode in modes:
+                headers = {"Content-Type": "application/json"}
+                headers.update(extra_headers or {})
+                h, p = _real_headers(key, mode)
+                headers.update(h)
+                if method == "GET":
+                    r = await c.get(url, headers=headers, params=p or None)
+                else:
+                    r = await c.post(url, headers=headers, params=p or None, json=json_body)
+                if r.status_code != 401:
+                    return r, mode
+                tried.append(mode)
+                last_body = r.text[:1500]
+    except Exception as e:
+        raise RuntimeError(f"Gateway nicht erreichbar ({url}): {e}\n{traceback.format_exc()}") from e
+    raise RuntimeError(
+        f"LLM-Auth fehlgeschlagen (HTTP 401 bei {url}, Key in {len(tried)} Schema(ta) abgewiesen: {', '.join(tried)}).\n"
+        f"Letzte Antwort: {last_body}\n"
+        "Prüfen: 1) Base-URL (nur Schema+Host+Pfadprefix wie .../v1, NICHT .../chat/completions — das hängt die App an). "
+        "2) Key gehört wirklich zu DIESEM Gateway (nicht z.B. OpenRouter-Key am OmniRouter). "
+        "3) Auf /settings testweise ein festes Auth-Schema statt Automatisch wählen."
+    )
+
+
+async def llm_generate(base_url: str, api_key: str, model: str, user_content: str, job: dict, auth: str = "bearer") -> str:
     """user_content ist der fertige User-Prompt (Neu-Erstellung oder Änderungswunsch inkl. Basis-Code)."""
     url = base_url.rstrip("/") + "/chat/completions"
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
     # OpenRouter-Empfehlungen (harmlos für andere Gateways)
-    headers.setdefault("HTTP-Referer", "http://localhost:8080/")
-    headers.setdefault("X-Title", "text2CAD-local")
+    extra = {"HTTP-Referer": "http://localhost:8080/", "X-Title": "text2CAD-local"}
     payload = {
         "model": model,
         "messages": [
@@ -279,11 +330,9 @@ async def llm_generate(base_url: str, api_key: str, model: str, user_content: st
         "max_tokens": 2500,
     }
     log(job, f"LLM-Request: POST {url} model={model}")
-    try:
-        async with httpx.AsyncClient(timeout=120) as c:
-            r = await c.post(url, headers=headers, json=payload)
-    except Exception as e:
-        raise RuntimeError(f"Gateway nicht erreichbar ({url}): {e}\n{traceback.format_exc()}") from e
+    r, mode = await gateway_request("POST", base_url, "/chat/completions", api_key, auth, 120, payload, extra)
+    if mode != "none":
+        log(job, f"Auth-Schema ok: {mode}")
     if r.status_code >= 400:
         raise RuntimeError(f"LLM-Fehler HTTP {r.status_code} bei {url} model={model}:\n{r.text[:4000]}")
     try:
@@ -422,12 +471,14 @@ async def run_job(job_id: str, req_data: dict) -> None:
         set_progress(job, 4, "Starte: Gateway auflösen")
         base, key = resolve_gateway(GenerateRequest(**req_data), settings)
         job["base_url"] = base
+        auth_mode = settings.get("omnirouter_auth", "auto") if req_data.get("provider") == "omnirouter" else "bearer"
+        job["auth_mode"] = auth_mode
         if not key:
             log(job, "WARNUNG: kein API-Key gesetzt — versuche anonymer Call; bei 401 bitte Key in Einstellungen hinterlegen.")
 
         set_progress(job, 10, f"Frage LLM ({req_data['model']}) …")
         user_content = build_user_prompt(req_data["prompt"], req_data.get("parent_job", ""), job)
-        raw = await llm_generate(base, key, req_data["model"], user_content, job)
+        raw = await llm_generate(base, key, req_data["model"], user_content, job, auth_mode)
         if not isinstance(raw, str) or not raw.strip():  # Gürtel+Hosenträger (llm_generate wirft i.d.R. schon)
             raise RuntimeError("LLM lieferte leere Antwort (None/leer) — siehe vorigen Log + anderes Modell wählen.")
         (d / "llm_raw.md").write_text(raw)
@@ -467,7 +518,7 @@ async def run_job(job_id: str, req_data: dict) -> None:
             if attempt >= max_attempts:
                 break
             log(job, f"Versuch {attempt}/{max_attempts} fehlgeschlagen — frage LLM nach Reparatur (Fehler-Feedback) …")
-            last_raw = await llm_generate(base, key, req_data["model"], build_repair_prompt(code or last_raw, err), job)
+            last_raw = await llm_generate(base, key, req_data["model"], build_repair_prompt(code or last_raw, err), job, auth_mode)
             if not isinstance(last_raw, str) or not last_raw.strip():
                 raise RuntimeError("LLM lieferte bei der Reparatur eine leere Antwort.")
             (d / "llm_repair.md").write_text(last_raw)
@@ -583,26 +634,25 @@ def post_settings(s: Settings):
 
 
 @app.get("/api/models")
-async def list_models(provider: str = "openrouter", base_url: str = "", api_key: str = ""):
+async def list_models(provider: str = "openrouter", base_url: str = "", api_key: str = "", auth: str = ""):
     settings = load_settings()
     provider = provider if provider in ("openrouter", "omnirouter", "custom") else "openrouter"
     if provider == "openrouter":
         base = (base_url or settings.get("openrouter_url") or OPENROUTER_BASE_DEFAULT).rstrip("/")
         key = api_key or settings.get("openrouter_key", "") or os.environ.get("OPENROUTER_API_KEY", "")
+        auth_mode = "bearer"
     elif provider == "omnirouter":
         base = (base_url or settings.get("omnirouter_url") or OMNIROUTER_BASE_DEFAULT).rstrip("/")
         key = api_key or settings.get("omnirouter_key", "") or os.environ.get("OMNIROUTER_API_KEY", "")
+        auth_mode = auth or settings.get("omnirouter_auth", "auto")
     else:
         base = (base_url or settings.get("custom_url") or "").rstrip("/")
         key = api_key or settings.get("custom_key", "") or ""
+        auth_mode = "bearer"
         if not base:
             return {"models": [], "fallback": True, "hint": "Custom-URL fehlt — auf der Einstellungsseite (/settings) hinterlegen (OpenAI-kompatible URL, z.B. http://host:11434/v1)"}
-    headers = {}
-    if key:
-        headers["Authorization"] = f"Bearer {key}"
     try:
-        async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.get(base.rstrip("/") + "/models", headers=headers)
+        r, mode = await gateway_request("GET", base, "/models", key, auth_mode, 20)
         if r.status_code >= 400:
             raise RuntimeError(f"HTTP {r.status_code}: {r.text[:2000]}")
         data = r.json()
@@ -615,7 +665,7 @@ async def list_models(provider: str = "openrouter", base_url: str = "", api_key:
         models = sorted(models, key=lambda x: x["id"])  # kein Cap: sonst fallen hintere Bereiche (z.B. z-ai/...) raus
         if not models:
             raise RuntimeError("Leere Modelliste vom Gateway.")
-        return {"models": models, "fallback": False, "base": base}
+        return {"models": models, "fallback": False, "base": base, "auth": mode}
     except Exception as e:
         fb = FALLBACK_MODELS.get(provider, FALLBACK_MODELS["openrouter"])
         return {

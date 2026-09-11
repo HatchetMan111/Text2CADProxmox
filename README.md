@@ -61,9 +61,10 @@ weitergezählt. Ist der Hostname `text2cad` belegt, wird `text2cad-2` genommen.
 ## Web-UI benutzen
 
 1. `http://[LXC-IP]:8080` öffnen.
-2. **Einstellungen** (`/settings`, Link oben rechts): OpenRouter-Key, OmniRouter-URL/Key,
-   Custom-URL/Key hinterlegen, Standard-Provider/-Modell/-Exporte wählen — inkl.
-   **Verbindungstest** pro Provider. Keys werden nur serverseitig gespeichert.
+2. **Einstellungen** (`/settings`, Link oben rechts): OpenRouter-Key, OmniRouter-URL/Key
+   **+ Auth-Schema** (Automatisch/Bearer/x-api-key/Query — falls ein Gateway trotz
+   frischem Key 401 meldet), Custom-URL/Key hinterlegen, Standardwerte wählen — inkl.
+   **Verbindungstest** pro Provider (zeigt auch das funktionierende Auth-Schema).
 3. Auf **Erstellen**: Provider + **Modell per Dropdown** wählen, Prompt eingeben
    (mm, FDM-gerecht), **CAD berechnen**.
 4. **Bearbeiten**: fertigen Job im Dropdown „Bearbeiten?" wählen, nur den

@@ -45,6 +45,14 @@ button.ghost{background:transparent;border:1px solid var(--line);color:var(--txt
 <div class="hint">Achtung: <code>localhost</code> meint aus Sicht des LXC den Container selbst — bei externem Gateway die LAN-IP eintragen.</div>
 <label>API-Key (optional) <span id="omni_set"></span></label>
 <input id="omni_key" type="password" placeholder="nur falls das Gateway einen Key verlangt" autocomplete="off">
+<label>Auth-Schema</label>
+<select id="omni_auth">
+<option value="auto">Automatisch (Bearer → x-api-key → Query, bei 401 weiter)</option>
+<option value="bearer">Bearer-Header (Standard)</option>
+<option value="x-api-key">x-api-key-Header</option>
+<option value="query">Query-Parameter (?api_key=…)</option>
+</select>
+<div class="hint">Bei 401 trotz frischem Key: erst Automatisch lassen (Test zeigt das funktionierende Schema), sonst fest wählen.</div>
 <div class="row" style="margin-top:8px"><button class="ghost" id="test_omni">Verbindung testen</button></div>
 <div class="status" id="st_omni"></div>
 </div>
@@ -83,6 +91,7 @@ const $=id=>document.getElementById(id);
 async function load(){
   const s=await (await fetch('/api/settings')).json();
   if(s.omnirouter_url)$('omni_url').value=s.omnirouter_url;
+  if(s.omnirouter_auth)$('omni_auth').value=s.omnirouter_auth;
   if(s.custom_url)$('custom_url').value=s.custom_url;
   if(s.default_provider)$('def_provider').value=s.default_provider;
   if(s.default_model)$('def_model').value=s.default_model;
@@ -92,21 +101,23 @@ async function load(){
   $('omni_set').textContent=s.omnirouter_key_set?'(hinterlegt ✓)':'';
   $('custom_set').textContent=s.custom_key_set?'(hinterlegt ✓)':'';
 }
-async function test(provider,base,el){
+async function test(provider,base,el,auth){
   const box=$(el); box.textContent='teste…';
   try{
     let q='/api/models?provider='+encodeURIComponent(provider);
     if(base)q+='&base_url='+encodeURIComponent(base);
+    if(auth)q+='&auth='+encodeURIComponent(auth);
     const j=await (await fetch(q)).json();
-    box.innerHTML=j.fallback?`<span class="err">Fallback</span> — ${j.hint||''}`:`<span class="ok">OK</span> — ${j.models.length} Modelle (${j.base||provider})`;
+    const via=j.auth?` (Auth: ${j.auth})`:'';
+    box.innerHTML=j.fallback?`<span class="err">Fallback</span> — ${j.hint||''}`:`<span class="ok">OK</span> — ${j.models.length} Modelle (${j.base||provider})${via}`;
   }catch(e){box.innerHTML='<span class="err">Fehler: '+e+'</span>';}
 }
 $('test_or').onclick=()=>test('openrouter','', 'st_or');
-$('test_omni').onclick=()=>test('omnirouter',$('omni_url').value,'st_omni');
+$('test_omni').onclick=()=>test('omnirouter',$('omni_url').value,'st_omni',$('omni_auth').value);
 $('test_custom').onclick=()=>test('custom',$('custom_url').value,'st_custom');
 $('save').onclick=async()=>{
   const ex=[]; if($('d_stl').checked)ex.push('stl'); if($('d_step').checked)ex.push('step'); if($('d_3mf').checked)ex.push('3mf');
-  const body={openrouter_key:$('or_key').value,omnirouter_url:$('omni_url').value,omnirouter_key:$('omni_key').value,custom_url:$('custom_url').value,custom_key:$('custom_key').value,default_provider:$('def_provider').value,default_model:$('def_model').value,default_exports:ex,default_snapshot:$('d_snap').checked};
+  const body={openrouter_key:$('or_key').value,omnirouter_url:$('omni_url').value,omnirouter_key:$('omni_key').value,omnirouter_auth:$('omni_auth').value,custom_url:$('custom_url').value,custom_key:$('custom_key').value,default_provider:$('def_provider').value,default_model:$('def_model').value,default_exports:ex,default_snapshot:$('d_snap').checked};
   const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   $('st_save').innerHTML=r.ok?'<span class="ok">Gespeichert.</span>':'<span class="err">Fehler: '+await r.text()+'</span>';
   if(r.ok){$('or_key').value='';$('omni_key').value='';$('custom_key').value='';load();}
