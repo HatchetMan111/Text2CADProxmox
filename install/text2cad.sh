@@ -98,15 +98,17 @@ free_hostname(){
 }
 
 ensure_template(){
+  # WICHTIG: Alles ausser der letzten echo-Zeile MUSS nach stderr — der Aufrufer
+  # macht TPL=$(ensure_template) und wuerde Logzeilen sonst in den Pfad einbauen.
   local stor="${VAR_TEMPLATE_STORAGE}"
-  msg_info "Suche Debian-12 LXC-Template auf Storage '${stor}' …"
+  msg_info "Suche Debian-12 LXC-Template auf Storage '${stor}' …" >&2
   local avail; avail=$(pveam available --section system 2>/dev/null | grep -o 'debian-12-standard_[^ ]*amd64.tar.[a-z0-9]*' | sort -V | tail -n1 || true)
   local local_tpl; local_tpl=$(pveam list "${stor}" 2>/dev/null | grep -o 'debian-12-standard_[^ ]*amd64.tar.[a-z0-9]*' | sort -V | tail -n1 || true)
-  if [[ -n "${local_tpl}" ]]; then msg_ok "Template vorhanden: ${stor}:vztmpl/${local_tpl}"; echo "${stor}:vztmpl/${local_tpl}"; return 0; fi
-  [[ -z "${avail}" ]] && { msg_error "Kein debian-12 Template gefunden (pveam available leer). Netzwerk/DNS pruefen."; pveam update; avail=$(pveam available --section system 2>/dev/null | grep -o 'debian-12-standard_[^ ]*amd64.tar.[a-z0-9]*' | sort -V | tail -n1 || true); }
-  [[ -z "${avail}" ]] && { msg_error "Weiterhin kein Template. Ausgabe von 'pveam available':"; pveam available --section system 2>&1 | head -n30; exit 1; }
-  msg_info "Lade Template ${avail} … (dauert beim ersten Mal)"
-  pveam download "${stor}" "${avail}"
+  if [[ -n "${local_tpl}" ]]; then msg_ok "Template vorhanden: ${stor}:vztmpl/${local_tpl}" >&2; echo "${stor}:vztmpl/${local_tpl}"; return 0; fi
+  [[ -z "${avail}" ]] && { msg_error "Kein debian-12 Template gefunden (pveam available leer). Netzwerk/DNS pruefen."; pveam update >&2; avail=$(pveam available --section system 2>/dev/null | grep -o 'debian-12-standard_[^ ]*amd64.tar.[a-z0-9]*' | sort -V | tail -n1 || true); }
+  [[ -z "${avail}" ]] && { msg_error "Weiterhin kein Template. Ausgabe von 'pveam available':"; pveam available --section system 2>&1 | head -n30 >&2; exit 1; }
+  msg_info "Lade Template ${avail} … (dauert beim ersten Mal)" >&2
+  pveam download "${stor}" "${avail}" >&2
   echo "${stor}:vztmpl/${avail}"
 }
 
