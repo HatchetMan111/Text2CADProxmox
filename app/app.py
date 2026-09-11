@@ -49,12 +49,12 @@ OMNIROUTER_BASE_DEFAULT = os.environ.get("OMNIROUTER_BASE_URL", "http://localhos
 # Kuratierte Fallback-Modelle (wenn kein Key / Gateway offline).
 FALLBACK_MODELS = {
     "openrouter": [
-        {"id": "anthropic/claude-sonnet-4", "name": "Claude Sonnet 4 (OpenRouter)"},
-        {"id": "openai/gpt-4o", "name": "GPT-4o (OpenRouter)"},
-        {"id": "google/gemini-2.5-pro", "name": "Gemini 2.5 Pro (OpenRouter)"},
-        {"id": "deepseek/deepseek-chat", "name": "DeepSeek Chat (OpenRouter)"},
-        {"id": "qwen/qwen3-coder:free", "name": "Qwen3 Coder :free (OpenRouter)"},
-        {"id": "meta-llama/llama-3.3-70b-instruct", "name": "Llama 3.3 70B (OpenRouter)"},
+        {"id": "cohere/north-mini-code:free", "name": "North Mini Code (OpenRouter :free)"},
+        {"id": "poolside/laguna-s-2.1:free", "name": "Laguna S 2.1 Code (OpenRouter :free)"},
+        {"id": "nvidia/nemotron-3-super-120b-a12b:free", "name": "Nemotron 3 Super 120B (OpenRouter :free)"},
+        {"id": "google/gemma-4-31b-it:free", "name": "Gemma 4 31B (OpenRouter :free)"},
+        {"id": "nex-agi/nex-n2.5-pro:free", "name": "Nex N2.5 Pro (OpenRouter :free)"},
+        {"id": "thinkingmachines/inkling-small:free", "name": "Inkling Small (OpenRouter :free)"},
     ],
     "omnirouter": [
         {"id": "gpt-4o", "name": "GPT-4o (OmniRouter)"},
