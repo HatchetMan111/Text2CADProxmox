@@ -90,7 +90,13 @@ if __name__ == "__main__":
 - Benutze benannte Konstanten (WIDTH, HEIGHT...), verbose Labels wo möglich.
 - KEINE Imports ausser cadgen/build123d/math. KEIN os/sys/subprocess/socket/open/network. KEIN Lesen/Schreiben von Dateien.
 - Halte das Teil einfach und robust: lieber primitives + Bohrungen/Fasen als komplexe Lofts.
+- Transformationen NUR nach build123d-0.11-Doku (https://build123d.readthedocs.io/en/latest/moving_objects.html):
+  Rotation als `teil.rotate(bd.Axis((0,0,0),(1,0,0)), 15)` (Axis-Objekt aus Startpunkt+Richtung, Winkel in GRAD, positional)
+  oder `bd.Rotation(15,0,0) * teil` (Euler-X/Y/Z in Grad). Translation als `teil.translate((x,y,z))`
+  oder `bd.Pos(x,y,z) * teil`. VERBOTEN: rotate/move mit rohem Tupel als Achse, Keyword `angle=`.
 """
+
+MAX_BUILD_REPAIR = 2  # auto. Reparaturversuche mit Fehler-Feedback nach einem Fehlschlag (1 Erstversuch + 2 Repairs)
 
 CODE_BLOCK_RE = re.compile(r"```python\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 FORBIDDEN_RE = re.compile(
@@ -291,6 +297,38 @@ def run_cmd(cmd: list[str], cwd: Path, timeout: int = 180) -> tuple[int, str, st
     return p.returncode, p.stdout, p.stderr
 
 
+def run_build(d: Path, timeout: int = 240) -> tuple[int, str, str]:
+    """Ein CAD-Build (python model.py). rc 124 = Timeout (kein Repair sinnvoll)."""
+    # Umgebungs-Blindheit von cadgen beachten: nur Dateien als Input
+    env = dict(os.environ)
+    env["CADGEN_DAEMON"] = "0"
+    try:
+        p = subprocess.run(
+            [sys.executable, "model.py", "--force"],
+            cwd=str(d), capture_output=True, text=True, timeout=timeout, env=env,
+        )
+        return p.returncode, p.stdout or "", p.stderr or ""
+    except subprocess.TimeoutExpired as e:
+        out = e.stdout if isinstance(e.stdout, str) else ""
+        err = (e.stderr if isinstance(e.stderr, str) else "") + f"\n[TIMEOUT nach {timeout}s]"
+        return 124, out or "", err
+
+
+def build_repair_prompt(code: str, err: str) -> str:
+    tail = (err or "")[-3500:]
+    return (
+        "Der CAD-Code ist beim Bauen mit `python model.py` FEHLGESCHLAGEN. Analysiere die Fehlerausgabe, "
+        "repariere die Ursache und gib das KOMPLETTE reparierte Modell als EINEN ```python-Block zurück "
+        "(gleiche Decoratoren @step/@stl, mm, FDM-Regeln, nur cadgen/build123d-Imports).\n"
+        "Bekannte build123d-0.11-Fallen (Doku https://build123d.readthedocs.io/en/latest/moving_objects.html):\n"
+        "- Rotation NUR als `teil.rotate(bd.Axis((0,0,0),(x,y,z)), WINKEL_GRAD)` (Axis-Objekt, Grad, positional) "
+        "oder `bd.Rotation(rx,ry,rz) * teil`. NIEMALS Tupel als Achse, NIEMALS Keyword `angle=`.\n"
+        "- Translation: `teil.translate((x,y,z))` oder `bd.Pos(x,y,z) * teil`.\n"
+        f"FEHLERAUSGABE:\n{tail}\n"
+        f"FEHLERHAFTER CODE:\n```python\n{code[:8000]}\n```"
+    )
+
+
 def dfam_check(stl_path: Path) -> dict:
     """Basis-DfAM (FDM): watertight, Volumen, BBox. Volle Analyse siehe text-to-cad Skill dfam-check."""
     report: dict = {"file": stl_path.name, "tool": "trimesh-basis"}
@@ -373,28 +411,35 @@ async def run_job(job_id: str, req_data: dict) -> None:
 
         set_progress(job, 38, "Extrahiere + prüfe Python-Code")
         code = sanitize_code(ensure_exports(extract_code(raw), req_data.get("exports", ["stl", "step"])))
-        (d / "model.py").write_text(code)
-        job["code"] = code
-        log(job, "Code-Validierung OK (cadgen/build123d, @step/@stl, keine verbotenen APIs).")
 
-        set_progress(job, 52, "Baue CAD (python model.py) …")
-        # Umgebungs-Blindheit von cadgen beachten: nur Dateien als Input
-        env = dict(os.environ)
-        env["CADGEN_DAEMON"] = "0"
-        try:
-            p = subprocess.run(
-                [sys.executable, "model.py", "--force"],
-                cwd=str(d), capture_output=True, text=True, timeout=240, env=env,
-            )
-            rc, out, err = p.returncode, p.stdout, p.stderr
-        except subprocess.TimeoutExpired as e:
-            raise RuntimeError(f"CAD-Build Timeout nach 240s.\nstdout:\n{(e.stdout or '')}\nstdout-ende\nstderr:\n{(e.stderr or '')}") from e
-        (d / "build.stdout.log").write_text(out or "")
-        (d / "build.stderr.log").write_text(err or "")
-        job["build"] = {"rc": rc, "stdout": (out or "")[-8000:], "stderr": (err or "")[-8000:]}
-        log(job, f"Build Exit-Code: {rc}\n--- stdout (tail) ---\n{(out or '')[-3000:]}\n--- stderr (tail) ---\n{(err or '')[-3000:]}")
+        max_attempts = 1 + MAX_BUILD_REPAIR
+        rc, out, err = 1, "", ""
+        for attempt in range(1, max_attempts + 1):
+            (d / "model.py").write_text(code)
+            job["code"] = code
+            if attempt == 1:
+                log(job, "Code-Validierung OK (cadgen/build123d, @step/@stl, keine verbotenen APIs).")
+            set_progress(job, 52, f"Baue CAD (Versuch {attempt}/{max_attempts}) …")
+            rc, out, err = run_build(d)
+            (d / "build.stdout.log").write_text(out)
+            (d / "build.stderr.log").write_text(err)
+            job["build"] = {"rc": rc, "attempt": attempt, "stdout": out[-8000:], "stderr": err[-8000:]}
+            log(job, f"Build-Versuch {attempt}: Exit-Code {rc}\n--- stdout (tail) ---\n{out[-3000:]}\n--- stderr (tail) ---\n{err[-3000:]}")
+            if rc == 0:
+                break
+            if rc == 124:
+                raise RuntimeError(f"CAD-Build Timeout (Versuch {attempt}).\nVOLLSTDOUT:\n{out}\nVOLLSTDERR:\n{err}")
+            if attempt >= max_attempts:
+                break
+            log(job, f"Versuch {attempt}/{max_attempts} fehlgeschlagen — frage LLM nach Reparatur (Fehler-Feedback) …")
+            raw2 = await llm_generate(base, key, req_data["model"], build_repair_prompt(code, err), job)
+            if not isinstance(raw2, str) or not raw2.strip():
+                raise RuntimeError("LLM lieferte bei der Reparatur eine leere Antwort.")
+            (d / "llm_repair.md").write_text(raw2)
+            code = sanitize_code(ensure_exports(extract_code(raw2), req_data.get("exports", ["stl", "step"])))
+            log(job, f"Reparatur-Code erhalten ({len(code)} Zeichen), validiert — neuer Build-Versuch.")
         if rc != 0:
-            raise RuntimeError(f"CAD-Build fehlgeschlagen (Exit {rc}).\nVOLLSTDOUT:\n{out}\nVOLLSTDERR:\n{err}")
+            raise RuntimeError(f"CAD-Build nach {max_attempts} Versuchen fehlgeschlagen (Exit {rc}).\nVOLLSTDOUT:\n{out}\nVOLLSTDERR:\n{err}")
 
         set_progress(job, 72, "Suche Exporte (STEP/STL/3MF)")
         files: dict[str, str] = {}
