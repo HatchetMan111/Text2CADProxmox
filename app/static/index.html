@@ -55,7 +55,9 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--mut)}
 <option value="custom">Custom (OpenAI-kompatibel, z. B. Ollama)</option>
 </select>
 <label>Modell <span class="tag" id="model_hint"></span></label>
+<input id="model_search" placeholder="🔍 Suchen/filtern, z. B. claude, llama, gpt, free…" autocomplete="off">
 <div class="row"><select id="model" style="flex:3"></select><button class="ghost" id="reload" style="flex:1">↻ Modelle</button></div>
+<div class="kv" id="model_count"></div>
 <div class="kv" id="prov_hint"></div>
 <label>Bearbeiten? <span class="tag">(fertiges Modell als Basis nehmen, Änderung unten beschreiben)</span></label>
 <div class="row"><select id="parent" style="flex:3"><option value="">— Neues Modell —</option></select><button class="ghost" id="reload_parents" style="flex:1">↻ Jobs</button></div>
@@ -143,17 +145,29 @@ async function loadSettings(){
     return s;
   }catch(e){return {};}
 }
+let allModels=[];
+function renderModels(){
+  const q=($('model_search').value||'').toLowerCase().trim();
+  const sel=$('model'); const cur=sel.value;
+  sel.innerHTML='';
+  const shown=allModels.filter(m=>!q||(m.id+' '+(m.name||'')).toLowerCase().includes(q));
+  shown.forEach(m=>{const o=document.createElement('option'); o.value=m.id; o.textContent=m.name||m.id; sel.appendChild(o);});
+  if(cur&&[...sel.options].some(o=>o.value===cur))sel.value=cur;
+  $('model_count').textContent=q?`${shown.length}/${allModels.length} Modelle (Filter: „${$('model_search').value}“ — ✕ zum Zurücksetzen: Feld leeren)`:`${allModels.length} Modelle`;
+}
+$('model_search').addEventListener('input',renderModels);
 async function loadModels(){
   const p=$('provider').value;
   $('model_hint').textContent='lade…'; $('prov_hint').textContent='';
   try{
     // Keys/URLs kommen serverseitig aus den Einstellungen — hier nur Provider wählen
     const r=await fetch('/api/models?provider='+encodeURIComponent(p)); const j=await r.json();
-    const sel=$('model'); sel.innerHTML='';
-    j.models.forEach(m=>{const o=document.createElement('option'); o.value=m.id; o.textContent=m.name||m.id; sel.appendChild(o);});
+    allModels=j.models||[];
+    renderModels();
+    const sel=$('model');
     const s=await (await fetch('/api/settings')).json();
     if(s.default_model&&[...sel.options].some(o=>o.value===s.default_model))sel.value=s.default_model;
-    $('model_hint').textContent=j.fallback?'(Fallback-Liste — Keys/Gateway auf der Einstellungsseite prüfen)':`(${j.models.length} Modelle von ${j.base||p})`;
+    $('model_hint').textContent=j.fallback?'(Fallback-Liste — Keys/Gateway auf der Einstellungsseite prüfen)':`(${allModels.length} Modelle von ${j.base||p})`;
     if(j.hint)$('prov_hint').textContent=j.hint;
   }catch(e){$('model_hint').textContent='Fehler: '+e;}
 }
