@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>text2CAD — Modelle</title>
+<style>
+:root{--bg:#0f1115;--card:#171b22;--line:#2a3140;--txt:#e8ecf3;--mut:#9aa4b5;--acc:#4da3ff;--ok:#3fb950;--err:#f85149}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.5 system-ui,Segoe UI,Roboto,Arial}
+header{padding:14px 22px;border-bottom:1px solid var(--line);display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+header h1{margin:0;font-size:22px}header small{color:var(--mut);flex:1}
+nav a{color:var(--txt);text-decoration:none;border:1px solid var(--line);border-radius:8px;padding:8px 14px;margin-left:8px}
+nav a.active{background:var(--acc);border-color:var(--acc);color:#fff}
+main{max-width:1180px;margin:0 auto;padding:20px}
+.toolbar{display:flex;gap:8px;margin-bottom:14px}
+.toolbar input{flex:3;background:#0d1016;border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:10px}
+button{background:var(--acc);border:0;color:#fff;border-radius:8px;padding:10px 14px;font-weight:600;cursor:pointer}
+button.ghost{background:transparent;border:1px solid var(--line);color:var(--txt)}
+button.danger{background:transparent;border:1px solid var(--err);color:var(--err)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.card img{width:100%;height:180px;object-fit:cover;background:#0d1016;border:1px solid var(--line);border-radius:8px}
+.nopic{width:100%;height:180px;display:flex;align-items:center;justify-content:center;background:#0d1016;border:1px dashed var(--line);border-radius:8px;color:var(--mut)}
+.prompt{font-weight:600;margin:8px 0 4px}
+.meta{font-size:12px;color:var(--mut)}
+.dl{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.dl a{border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:var(--txt);text-decoration:none;font-size:13px}
+.badge{display:inline-block;border-radius:99px;padding:2px 10px;font-size:12px}
+.badge.done{background:#12341f;color:var(--ok)}.badge.error{background:#3d1512;color:var(--err)}.badge.running{background:#1c2c45;color:var(--acc)}
+.kv{font-size:13px;color:var(--mut)}
+</style>
+</head>
+<body>
+<header>
+<h1>text2CAD</h1>
+<small>Modell-Bibliothek — alle erzeugten Teile mit Vorschau &amp; Download</small>
+<nav><a href="/">🛠 Erstellen</a><a href="/models" class="active">🗂 Modelle</a><a href="/settings">⚙ Einstellungen</a></nav>
+</header>
+<main>
+<div class="toolbar">
+<input id="q" placeholder="🔍 Suchen in Prompt / Modell / Job-ID…" autocomplete="off">
+<button class="ghost" id="reload">↻ Aktualisieren</button>
+</div>
+<div class="kv" id="count"></div>
+<div class="grid" id="grid" style="margin-top:12px"></div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let all=[];
+function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function render(){
+  const q=($('q').value||'').toLowerCase().trim();
+  const g=$('grid'); g.innerHTML='';
+  const list=all.filter(j=>!q||((j.prompt||'')+' '+(j.model||'')+' '+(j.id||'')).toLowerCase().includes(q));
+  $('count').textContent=`${list.length}/${all.length} Modelle`;
+  if(!list.length){g.innerHTML='<div class="kv">Keine Modelle gefunden.</div>';return;}
+  list.forEach(j=>{
+    const files=j.files||{};
+    const d=document.createElement('div'); d.className='card';
+    const img=files.png?`<a href="/download/${j.id}/${files.png}" target="_blank"><img src="/download/${j.id}/${files.png}" loading="lazy" alt="Vorschau"></a>`:`<div class="nopic">keine Vorschau</div>`;
+    const badge=j.status==='done'?'done':(j.status==='error'?'error':'running');
+    let dls='';
+    for(const [k,f] of Object.entries(files)){if(k==='png')continue; dls+=`<a href="/download/${j.id}/${f}" download="${f}">⬇ ${esc(f)}</a>`;}
+    dls+=`<a href="/download/${j.id}/model.py">⬇ model.py</a>`;
+    const dfam=j.dfam&&j.dfam.bbox_mm?`BBox ${j.dfam.bbox_mm} mm · watertight: ${j.dfam.watertight??'—'}`:'';
+    d.innerHTML=`${img}
+      <div class="prompt">${esc(j.prompt||'(ohne Prompt)')}</div>
+      <div class="meta"><span class="badge ${badge}">${j.status}</span> <b>${esc(j.id)}</b> · ${esc(j.created_at||'').slice(0,16).replace('T',' ')}${j.parent_job?` · Änderung von <b>${esc(j.parent_job)}</b>`:''}</div>
+      <div class="meta">${esc(j.provider||'')} / ${esc(j.model||'')} ${dfam?'· '+esc(dfam):''}</div>
+      <div class="dl">${dls}</div>
+      <div class="dl"><button class="danger" data-del="${j.id}">🗑 Löschen</button></div>`;
+    g.appendChild(d);
+  });
+  g.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{
+    if(!confirm(`Job ${b.dataset.del} inkl. aller Dateien löschen?`))return;
+    const r=await fetch('/api/jobs/'+b.dataset.del,{method:'DELETE'});
+    if(!r.ok){alert('Löschen fehlgeschlagen: '+await r.text());return;}
+    load();
+  });
+}
+async function load(){
+  try{
+    all=await (await fetch('/api/jobs')).json();
+    render();
+  }catch(e){$('count').textContent='Fehler: '+e;}
+}
+$('q').addEventListener('input',render);
+$('reload').onclick=load;
+load();
+</script>
+</body>
+</html>

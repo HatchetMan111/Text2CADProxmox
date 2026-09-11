@@ -69,9 +69,12 @@ weitergezählt. Ist der Hostname `text2cad` belegt, wird `text2cad-2` genommen.
 4. **Bearbeiten**: fertigen Job im Dropdown „Bearbeiten?" wählen, nur den
    Änderungswunsch beschreiben (z. B. „Bohrung auf 8 mm") — die alte `model.py`
    dient als Basis, der neue Job verlinkt den Parent.
-4. **Fortschrittsbalken** + Stage-Text + Voll-Logs verfolgen; nach Fertigstellung
+5. **Bibliothek** (`/models`, Link oben): alle erzeugten Modelle als Tabelle mit
+   Vorschau, Meta (Modell, BBox, watertight) und **Download-Links** (STL/STEP/3MF,
+   `model.py`) — kein Suchen auf dem Server nötig; Einträge lassen sich löschen.
+6. **Fortschrittsbalken** + Stage-Text + Voll-Logs verfolgen; nach Fertigstellung
    **STL im Viewer drehen/zoomen** und **STL / STEP / 3MF + model.py** herunterladen.
-5. Ohne Key geht die Modelliste in den Fallback-Modus; der Build braucht einen
+7. Ohne Key geht die Modelliste in den Fallback-Modus; der Build braucht einen
    erreichbaren Gateway (sonst steht die komplette Fehlerkette in den Logs).
 
 Für OmniRouter lokal: Standard `http://localhost:20128/v1` im LXC anpassen auf die

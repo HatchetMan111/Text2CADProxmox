@@ -651,6 +651,21 @@ def jobs_list():
     return out[:30]
 
 
+@app.delete("/api/jobs/{job_id}")
+def job_delete(job_id: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", job_id or ""):
+        raise HTTPException(400, f"Ungültige Job-ID: {job_id}")
+    d = JOBS_DIR / job_id
+    if not d.exists() or not d.is_dir():
+        raise HTTPException(404, f"Job {job_id} unbekannt.")
+    try:
+        shutil.rmtree(d)
+    except Exception as e:
+        raise HTTPException(500, f"Löschen fehlgeschlagen: {e}\n{traceback.format_exc()}")
+    JOBS.pop(job_id, None)
+    return {"ok": True, "deleted": job_id}
+
+
 @app.get("/download/{job_id}/{fname}")
 def download(job_id: str, fname: str):
     # Path-Traversal-Schutz
@@ -686,6 +701,14 @@ def settings_page():
     if idx.exists():
         return HTMLResponse(idx.read_text())
     return HTMLResponse("<h1>text2CAD</h1><p>static/settings.html fehlt.</p>", status_code=500)
+
+
+@app.get("/models", response_class=HTMLResponse)
+def models_page():
+    idx = STATIC_DIR / "models.html"
+    if idx.exists():
+        return HTMLResponse(idx.read_text())
+    return HTMLResponse("<h1>text2CAD</h1><p>static/models.html fehlt.</p>", status_code=500)
 
 
 if __name__ == "__main__":
