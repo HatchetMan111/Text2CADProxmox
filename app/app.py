@@ -13,6 +13,7 @@ Fallback-Beispiele ohne Key).
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import os
@@ -94,6 +95,9 @@ if __name__ == "__main__":
   Rotation als `teil.rotate(bd.Axis((0,0,0),(1,0,0)), 15)` (Axis-Objekt aus Startpunkt+Richtung, Winkel in GRAD, positional)
   oder `bd.Rotation(15,0,0) * teil` (Euler-X/Y/Z in Grad). Translation als `teil.translate((x,y,z))`
   oder `bd.Pos(x,y,z) * teil`. VERBOTEN: rotate/move mit rohem Tupel als Achse, Keyword `angle=`.
+- Kanten/Faces NUR so: Fasen/Verrundungen als Modul-Funktionen `bd.chamfer(teil.edges().filter_by(...), 0.5)`
+  bzw. `bd.fillet(...)`. VERBOTEN: String-Selektoren wie faces(">Z")/edges("|Z") (gibt es in 0.11 nicht —
+  faces()/edges() nehmen keine Positionsargumente), .chamfer()/.fillet() als Methoden.
 """
 
 MAX_BUILD_REPAIR = 2  # auto. Reparaturversuche mit Fehler-Feedback nach einem Fehlschlag (1 Erstversuch + 2 Repairs)
@@ -207,9 +211,13 @@ def sanitize_code(code: str) -> str:
     if FORBIDDEN_RE.search(code):
         raise ValueError("Generierter Code nutzt verbotene APIs (os/subprocess/socket/open/eval) — verworfen.")
     if "build123d" not in code and "cadgen" not in code:
-        raise ValueError("Code nutzt weder build123d noch cadgen — verworfen.")
+        raise ValueError("Code nutzt weder build123d noch cadgen — verworfen (vermutlich Prosa statt Code).")
     if "@step" not in code and "@stl" not in code:
         raise ValueError("Code enthaelt keinen @step/@stl Decorator — verworfen.")
+    try:
+        ast.parse(code)
+    except SyntaxError as e:
+        raise ValueError(f"Kein gültiges Python (SyntaxError Zeile {e.lineno}: {e.msg}) — verworfen.") from e
     if "__main__" not in code:
         code += '\n\nif __name__ == "__main__":\n    part()\n'
     return code
@@ -339,6 +347,8 @@ def build_repair_prompt(code: str, err: str) -> str:
         "- Rotation NUR als `teil.rotate(bd.Axis((0,0,0),(x,y,z)), WINKEL_GRAD)` (Axis-Objekt, Grad, positional) "
         "oder `bd.Rotation(rx,ry,rz) * teil`. NIEMALS Tupel als Achse, NIEMALS Keyword `angle=`.\n"
         "- Translation: `teil.translate((x,y,z))` oder `bd.Pos(x,y,z) * teil`.\n"
+        "- Fasen/Verrundungen NUR als `bd.chamfer(teil.edges().filter_by(...), 0.5)` / `bd.fillet(...)` "
+        "(Modul-Funktionen). VERBOTEN: faces(\">Z\")/edges(\"|Z\") und .chamfer()/.fillet()-Methoden.\n"
         f"FEHLERAUSGABE:\n{tail}\n"
         f"FEHLERHAFTER CODE:\n```python\n{code[:8000]}\n```"
     )
@@ -425,21 +435,28 @@ async def run_job(job_id: str, req_data: dict) -> None:
         job["llm_raw"] = raw[:6000]
 
         set_progress(job, 38, "Extrahiere + prüfe Python-Code")
-        code = sanitize_code(ensure_exports(extract_code(raw), req_data.get("exports", ["stl", "step"])))
 
         max_attempts = 1 + MAX_BUILD_REPAIR
         rc, out, err = 1, "", ""
+        code = ""
+        last_raw = raw
         for attempt in range(1, max_attempts + 1):
-            (d / "model.py").write_text(code)
-            job["code"] = code
-            if attempt == 1:
-                log(job, "Code-Validierung OK (cadgen/build123d, @step/@stl, keine verbotenen APIs).")
-            set_progress(job, 52, f"Baue CAD (Versuch {attempt}/{max_attempts}) …")
-            rc, out, err = run_build(d)
+            try:
+                code = sanitize_code(ensure_exports(extract_code(last_raw), req_data.get("exports", ["stl", "step"])))
+            except Exception as e:
+                rc, out, err = 1, "", (f"Code-Validierung fehlgeschlagen (Build nicht versucht):\n{e}\n"
+                                       f"Antwort-Ausschnitt (erste 2000 Zeichen):\n{(last_raw or '')[:2000]}")
+            else:
+                (d / "model.py").write_text(code)
+                job["code"] = code
+                if attempt == 1:
+                    log(job, "Code-Validierung OK (cadgen/build123d, @step/@stl, gültiges Python, keine verbotenen APIs).")
+                set_progress(job, 52, f"Baue CAD (Versuch {attempt}/{max_attempts}) …")
+                rc, out, err = run_build(d)
             (d / "build.stdout.log").write_text(out)
             (d / "build.stderr.log").write_text(err)
             job["build"] = {"rc": rc, "attempt": attempt, "stdout": out[-8000:], "stderr": err[-8000:]}
-            log(job, f"Build-Versuch {attempt}: Exit-Code {rc}\n--- stdout (tail) ---\n{out[-3000:]}\n--- stderr (tail) ---\n{err[-3000:]}")
+            log(job, f"Versuch {attempt}: rc={rc}\n--- stdout (tail) ---\n{out[-3000:]}\n--- stderr/Validierung (tail) ---\n{err[-3000:]}")
             if rc == 0:
                 break
             if rc == 124:
@@ -450,14 +467,15 @@ async def run_job(job_id: str, req_data: dict) -> None:
             if attempt >= max_attempts:
                 break
             log(job, f"Versuch {attempt}/{max_attempts} fehlgeschlagen — frage LLM nach Reparatur (Fehler-Feedback) …")
-            raw2 = await llm_generate(base, key, req_data["model"], build_repair_prompt(code, err), job)
-            if not isinstance(raw2, str) or not raw2.strip():
+            last_raw = await llm_generate(base, key, req_data["model"], build_repair_prompt(code or last_raw, err), job)
+            if not isinstance(last_raw, str) or not last_raw.strip():
                 raise RuntimeError("LLM lieferte bei der Reparatur eine leere Antwort.")
-            (d / "llm_repair.md").write_text(raw2)
-            code = sanitize_code(ensure_exports(extract_code(raw2), req_data.get("exports", ["stl", "step"])))
-            log(job, f"Reparatur-Code erhalten ({len(code)} Zeichen), validiert — neuer Build-Versuch.")
+            (d / "llm_repair.md").write_text(last_raw)
+            log(job, f"Reparatur-Antwort erhalten ({len(last_raw)} Zeichen) — neuer Versuch.")
         if rc != 0:
-            raise RuntimeError(f"CAD-Build nach {max_attempts} Versuchen fehlgeschlagen (Exit {rc}).\nVOLLSTDOUT:\n{out}\nVOLLSTDERR:\n{err}")
+            raise RuntimeError(f"CAD-Build nach {max_attempts} Versuchen fehlgeschlagen (Exit {rc}).\nVOLLSTDOUT:\n{out}\nVOLLSTDERR:\n{err}\n"
+                               "Tipp: Scheitert immer dasselbe Modell schon an der Code-Erzeugung, "
+                               "per Dropdown ein anderes (leistungsstärkeres) Modell wählen.")
 
         set_progress(job, 72, "Suche Exporte (STEP/STL/3MF)")
         files: dict[str, str] = {}
