@@ -67,7 +67,8 @@ FALLBACK_MODELS = {
 
 SYSTEM_PROMPT = """Du bist ein CAD-Code-Generator für build123d + cadgen (text-to-cad Skill).
 REGELN (strikt einhalten):
-- Gib GENAU EINEN Python-Codeblock mit ```python ... ``` zurück, sonst nichts davor/danach ausser einer Zeile Zusammenfassung.
+- Gib GENAU EINEN Python-Codeblock mit ```python ... ``` zurück. Deine Antwort BEGINNT mit ```python
+  (kein Vorwort, kein Thinking, kein Prosa davor — erst Code, danach hoechstens eine Zeile Zusammenfassung).
 - Einheiten: Millimeter. Ursprung: Zentrum des Hauptteils, Basis XY, Extrusion +Z.
 - Nutze: from cadgen import build123d as bd / from cadgen import step, stl, threemf
 - EXAKT EINE Modellfunktion ohne Parameter mit Decoratoren @step UND @stl, z.B.:
@@ -315,11 +316,15 @@ async def gateway_request(method: str, base_url: str, path: str, key: str, auth:
     )
 
 
-async def llm_generate(base_url: str, api_key: str, model: str, user_content: str, job: dict, auth: str = "bearer") -> str:
+async def llm_generate(base_url: str, api_key: str, model: str, user_content: str, job: dict,
+                   auth: str = "bearer", provider: str = "openrouter") -> str:
     """user_content ist der fertige User-Prompt (Neu-Erstellung oder Änderungswunsch inkl. Basis-Code)."""
     url = base_url.rstrip("/") + "/chat/completions"
     # OpenRouter-Empfehlungen (harmlos für andere Gateways)
     extra = {"HTTP-Referer": "http://localhost:8080/", "X-Title": "text2CAD-local"}
+    # Grosszuegiges Budget: Denk-Modelle verpulvern sonst alles mit Thinking und
+    # werden mitten im Satz abgeschnitten (kein Codeblock!). Custom klein halten (lokale ctx).
+    max_tokens = 8000 if provider in ("openrouter", "omnirouter") else 4000
     payload = {
         "model": model,
         "messages": [
@@ -327,8 +332,12 @@ async def llm_generate(base_url: str, api_key: str, model: str, user_content: st
             {"role": "user", "content": user_content},
         ],
         "temperature": 0.2,
-        "max_tokens": 2500,
+        "max_tokens": max_tokens,
     }
+    if provider == "openrouter":
+        # Thinking deckeln (wird sonst vor dem Code abgeschnitten); wird von der
+        # API bei Modellen ohne Reasoning-Unterstuetzung ignoriert.
+        payload["reasoning"] = {"effort": "low"}
     log(job, f"LLM-Request: POST {url} model={model}")
     r, mode = await gateway_request("POST", base_url, "/chat/completions", api_key, auth, 120, payload, extra)
     if mode != "none":
@@ -478,7 +487,7 @@ async def run_job(job_id: str, req_data: dict) -> None:
 
         set_progress(job, 10, f"Frage LLM ({req_data['model']}) …")
         user_content = build_user_prompt(req_data["prompt"], req_data.get("parent_job", ""), job)
-        raw = await llm_generate(base, key, req_data["model"], user_content, job, auth_mode)
+        raw = await llm_generate(base, key, req_data["model"], user_content, job, auth_mode, req_data.get("provider", "openrouter"))
         if not isinstance(raw, str) or not raw.strip():  # Gürtel+Hosenträger (llm_generate wirft i.d.R. schon)
             raise RuntimeError("LLM lieferte leere Antwort (None/leer) — siehe vorigen Log + anderes Modell wählen.")
         (d / "llm_raw.md").write_text(raw)
@@ -518,7 +527,7 @@ async def run_job(job_id: str, req_data: dict) -> None:
             if attempt >= max_attempts:
                 break
             log(job, f"Versuch {attempt}/{max_attempts} fehlgeschlagen — frage LLM nach Reparatur (Fehler-Feedback) …")
-            last_raw = await llm_generate(base, key, req_data["model"], build_repair_prompt(code or last_raw, err), job, auth_mode)
+            last_raw = await llm_generate(base, key, req_data["model"], build_repair_prompt(code or last_raw, err), job, auth_mode, req_data.get("provider", "openrouter"))
             if not isinstance(last_raw, str) or not last_raw.strip():
                 raise RuntimeError("LLM lieferte bei der Reparatur eine leere Antwort.")
             (d / "llm_repair.md").write_text(last_raw)
