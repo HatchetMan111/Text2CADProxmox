@@ -234,14 +234,14 @@ fi
 cp -r /opt/text2cad-src/app/* /opt/text2cad/app/
 cp /opt/text2cad-src/systemd/text2cad.service /etc/systemd/system/text2cad.service
 sed -i "s/--port 8080/--port \${APP_PORT}/; s/:8080/:\${APP_PORT}/" /etc/systemd/system/text2cad.service || true
-REQ_HASH=$(sha256sum /opt/text2cad/app/requirements.txt | awk '{print $1}')
-if [[ ! -d /opt/text2cad/.venv || ! -f /opt/text2cad/.venv.reqhash || "$(cat /opt/text2cad/.venv.reqhash 2>/dev/null)" != "${REQ_HASH}" ]]; then
-  echo "[CT] Baue Python-venv (neu/frisch, Hash ${REQ_HASH:0:12}…) — alte OCP-Mischungen werden restlos entfernt."
+REQ_HASH=\$(sha256sum /opt/text2cad/app/requirements.txt | awk '{print \$1}')
+if [[ ! -d /opt/text2cad/.venv || ! -f /opt/text2cad/.venv.reqhash || "\$(cat /opt/text2cad/.venv.reqhash 2>/dev/null)" != "\${REQ_HASH}" ]]; then
+  echo "[CT] Baue Python-venv (neu/frisch, Hash \${REQ_HASH:0:12}…) — alte OCP-Mischungen werden restlos entfernt."
   rm -rf /opt/text2cad/.venv
   python3 -m venv /opt/text2cad/.venv
   /opt/text2cad/.venv/bin/pip install --upgrade pip wheel
   /opt/text2cad/.venv/bin/pip install -r /opt/text2cad/app/requirements.txt
-  echo "${REQ_HASH}" > /opt/text2cad/.venv.reqhash
+  echo "\${REQ_HASH}" > /opt/text2cad/.venv.reqhash
 else
   echo "[CT] venv aktuell (Requirements unverändert) — kein Neuaufbau."
 fi
