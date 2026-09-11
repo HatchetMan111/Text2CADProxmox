@@ -104,6 +104,11 @@ import {STLLoader} from 'three/addons/loaders/STLLoader.js';
 
 const $=id=>document.getElementById(id);
 let poll=null, scene, camera, renderer, controls, mesh=null;
+const LS_PROVIDER='t2c_provider', LS_MODEL='t2c_model_';
+const saveProvider=p=>{try{localStorage.setItem(LS_PROVIDER,p);}catch(e){}};
+const saveModel=(p,m)=>{try{if(m)localStorage.setItem(LS_MODEL+p,m);}catch(e){}};
+const savedProvider=()=>{try{return localStorage.getItem(LS_PROVIDER)||'';}catch(e){return '';}};
+const savedModel=p=>{try{return localStorage.getItem(LS_MODEL+p)||'';}catch(e){return '';}};
 
 function initViewer(){
   const el=$('viewer');
@@ -135,7 +140,9 @@ function log(t){const p=$('logs'); if(p.textContent==='—')p.textContent=''; p.
 async function loadSettings(){
   try{
     const s=await (await fetch('/api/settings')).json();
-    if(s.default_provider)$('provider').value=s.default_provider;
+    const want=savedProvider()||s.default_provider;
+    if(want)$('provider').value=want;
+    saveProvider($('provider').value);
     const kb=[];
     kb.push('OpenRouter-Key: '+(s.openrouter_key_set?'<span class="ok">hinterlegt</span>':'<span class="err">fehlt</span>'));
     kb.push('OmniRouter-Key: '+(s.omnirouter_key_set?'<span class="ok">hinterlegt</span>':'<span class="err">optional/fehlt</span>'));
@@ -150,22 +157,23 @@ let allModels=[];
 function renderModels(){
   const q=($('model_search').value||'').toLowerCase().trim();
   const sel=$('model'); const cur=sel.value;
+  const target=cur||savedModel($('provider').value);
   sel.innerHTML='';
   const shown=allModels.filter(m=>!q||(m.id+' '+(m.name||'')).toLowerCase().includes(q));
   shown.forEach(m=>{const o=document.createElement('option'); o.value=m.id; o.textContent=m.name||m.id; sel.appendChild(o);});
-  if(cur&&[...sel.options].some(o=>o.value===cur))sel.value=cur;
+  if(target&&[...sel.options].some(o=>o.value===target))sel.value=target;
   updateFreeHint();
   $('model_count').textContent=q?`${shown.length}/${allModels.length} Modelle (Filter: „${$('model_search').value}“ — ✕ zum Zurücksetzen: Feld leeren)`:`${allModels.length} Modelle`;
 }
 $('model_search').addEventListener('input',renderModels);
-$('model').addEventListener('change',updateFreeHint);
+$('model').addEventListener('change',()=>{updateFreeHint();saveModel($('provider').value,$('model').value);});
 function updateFreeHint(){
   const v=$('model').value||'';
   $('free_hint').innerHTML=v.includes(':free')?'<span class="err">Free-Modell: liefert oft unbrauchbaren Code — bei Fehlern ein stärkeres Modell wählen.</span>':'';
 }
 async function loadModels(){
   const p=$('provider').value;
-  $('model_hint').textContent='lade…'; $('prov_hint').textContent='';
+  $('model_hint').textContent='lade...'; $('prov_hint').textContent='';
   try{
     // Keys/URLs kommen serverseitig aus den Einstellungen — hier nur Provider wählen
     const r=await fetch('/api/models?provider='+encodeURIComponent(p)); const j=await r.json();
@@ -173,7 +181,10 @@ async function loadModels(){
     renderModels();
     const sel=$('model');
     const s=await (await fetch('/api/settings')).json();
-    if(s.default_model&&[...sel.options].some(o=>o.value===s.default_model))sel.value=s.default_model;
+    // Reihenfolge: zuletzt in diesem Browser gewähltes Modell > Standard aus Settings
+    const want=savedModel(p)||s.default_model;
+    if(want&&[...sel.options].some(o=>o.value===want))sel.value=want;
+    updateFreeHint();
     $('model_hint').textContent=j.fallback?'(Fallback-Liste — Keys/Gateway auf der Einstellungsseite prüfen)':`(${allModels.length} Modelle von ${j.base||p})`;
     if(j.hint)$('prov_hint').textContent=j.hint;
   }catch(e){$('model_hint').textContent='Fehler: '+e;}
@@ -193,12 +204,14 @@ async function loadParents(){
 }
 $('reload_parents').onclick=loadParents;
 $('parent').onchange=()=>{$('prompt').placeholder=$('parent').value?'z. B. Bohrung auf 8mm vergrössern, Wand auf 5mm verstärken, Höhe +10mm…':'z. B. Handyhalter 80x20x60mm, 15° geneigt, 4mm Wand, Kabelschlitz 12mm, abgerundete Kanten…';};
-$('reload').onclick=loadModels; $('provider').onchange=async()=>{await loadSettings();loadModels();};
+$('reload').onclick=loadModels;
+$('provider').onchange=()=>{saveProvider($('provider').value);loadSettings();loadModels();};
 document.querySelectorAll('[data-ex]').forEach(b=>b.onclick=()=>{$('prompt').value=b.dataset.ex;});
 $('go').onclick=async()=>{
   const ex=[]; if($('e_stl').checked)ex.push('stl'); if($('e_step').checked)ex.push('step'); if($('e_3mf').checked)ex.push('3mf');
   const body={prompt:$('prompt').value,provider:$('provider').value,model:$('model').value,api_key:'',base_url:'',exports:ex,want_snapshot:$('snap').checked,parent_job:$('parent').value||''};
   if(!body.model){alert('Kein Modell gewählt — erst Modelle laden.');return;}
+  saveProvider(body.provider); saveModel(body.provider,body.model);
   $('go').disabled=true; $('dls').innerHTML=''; $('logs').textContent='';
   $('bar').firstElementChild.style.width='2%'; $('stage').textContent='Sende an LLM…';
   const r=await fetch('/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
