@@ -61,10 +61,11 @@ weitergezählt. Ist der Hostname `text2cad` belegt, wird `text2cad-2` genommen.
 ## Web-UI benutzen
 
 1. `http://[LXC-IP]:8080` öffnen.
-2. Provider wählen (**OpenRouter** / **OmniRouter** / Custom), Key bzw. OmniRouter-URL
-   eintragen (z. B. `http://192.168.x.x:20128/v1`), **↻ Modelle** → **Modell per Dropdown** wählen.
-3. Prompt eingeben (mm, FDM-gerecht, z. B. Wand ≥ 2 mm), Exporte + Snapshot wählen,
-   **CAD berechnen**.
+2. **Einstellungen** (`/settings`, Link oben rechts): OpenRouter-Key, OmniRouter-URL/Key,
+   Custom-URL/Key hinterlegen, Standard-Provider/-Modell/-Exporte wählen — inkl.
+   **Verbindungstest** pro Provider. Keys werden nur serverseitig gespeichert.
+3. Auf **Erstellen**: Provider + **Modell per Dropdown** wählen, Prompt eingeben
+   (mm, FDM-gerecht), **CAD berechnen**.
 4. **Fortschrittsbalken** + Stage-Text + Voll-Logs verfolgen; nach Fertigstellung
    **STL im Viewer drehen/zoomen** und **STL / STEP / 3MF + model.py** herunterladen.
 5. Ohne Key geht die Modelliste in den Fallback-Modus; der Build braucht einen

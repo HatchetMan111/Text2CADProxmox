@@ -3,12 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>text2CAD — Text zu 3D-Druck</title>
+<title>text2CAD — Erstellen</title>
 <style>
 :root{--bg:#0f1115;--card:#171b22;--line:#2a3140;--txt:#e8ecf3;--mut:#9aa4b5;--acc:#4da3ff;--ok:#3fb950;--err:#f85149}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.5 system-ui,Segoe UI,Roboto,Arial}
-header{padding:18px 22px;border-bottom:1px solid var(--line);display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-header h1{margin:0;font-size:22px}header small{color:var(--mut)}
+header{padding:14px 22px;border-bottom:1px solid var(--line);display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+header h1{margin:0;font-size:22px}header small{color:var(--mut);flex:1}
+nav a{color:var(--txt);text-decoration:none;border:1px solid var(--line);border-radius:8px;padding:8px 14px;margin-left:8px}
+nav a.active{background:var(--acc);border-color:var(--acc);color:#fff}
 main{max-width:1180px;margin:0 auto;padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:980px){main{grid-template-columns:1fr}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
@@ -27,6 +29,8 @@ pre#logs{background:#0d1016;border:1px solid var(--line);border-radius:8px;paddi
 .dl{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .dl a{border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--txt);text-decoration:none}
 .tag{font-size:12px;color:var(--mut)}
+.keybox{border:1px dashed var(--line);border-radius:8px;padding:8px 10px;margin-top:10px;font-size:13px;color:var(--mut)}
+.keybox a{color:var(--acc)}
 details{margin-top:10px}summary{cursor:pointer;color:var(--mut)}
 .kv{font-size:13px;color:var(--mut)}
 .ok{color:var(--ok)}.err{color:var(--err)}
@@ -38,7 +42,8 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--mut)}
 <body>
 <header>
 <h1>text2CAD</h1>
-<small>Text → CAD (build123d/cadgen) → <b>STL / STEP / 3MF</b> für den 3D-Druck · LXC-lokal · OpenRouter + OmniRouter</small>
+<small>Text → CAD (build123d/cadgen) → <b>STL / STEP / 3MF</b> für den 3D-Druck</small>
+<nav><a href="/" class="active">🛠 Erstellen</a><a href="/settings">⚙ Einstellungen</a></nav>
 </header>
 <main>
 <div class="card">
@@ -49,17 +54,10 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--mut)}
 <option value="omnirouter">OmniRouter (OpenAI-kompatibel)</option>
 <option value="custom">Custom (OpenAI-kompatibel, z. B. Ollama)</option>
 </select>
-<div class="row">
-<div><label>OpenRouter API-Key</label><input id="or_key" type="password" placeholder="sk-or-…" autocomplete="off"></div>
-<div><label>OmniRouter URL</label><input id="omni_url" placeholder="http://localhost:20128/v1"></div>
-</div>
-<label>OmniRouter / Custom Key (optional)</label>
-<input id="omni_key" type="password" placeholder="nur falls Gateway Key verlangt" autocomplete="off">
-<label>Custom Base-URL (nur Provider Custom)</label>
-<input id="custom_url" placeholder="http://192.168.x.x:11434/v1">
 <label>Modell <span class="tag" id="model_hint"></span></label>
 <div class="row"><select id="model" style="flex:3"></select><button class="ghost" id="reload" style="flex:1">↻ Modelle</button></div>
 <div class="kv" id="prov_hint"></div>
+<div class="keybox" id="keybox">API-Keys werden auf der <a href="/settings">Einstellungsseite</a> hinterlegt.</div>
 <h3 style="margin-top:18px">2 · Bauteil beschreiben</h3>
 <label>Prompt (mm, FDM-gerecht formulieren)</label>
 <textarea id="prompt" placeholder="z. B. Handyhalter 80x20x60mm, 15° geneigt, 4mm Wand, Kabelschlitz 12mm, abgerundete Kanten…">Handyhalter 80mm breit, 20mm tief, 60mm hoch, 15 Grad geneigt, 4mm Wandstaerke, Kabelschlitz 12mm, Fasen statt scharfer Kanten</textarea>
@@ -71,7 +69,7 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--mut)}
 </div></div>
 <div><label>&nbsp;</label><label style="display:block"><input type="checkbox" id="snap" checked style="width:auto"> Snapshot rendern</label></div>
 </div>
-<div style="margin-top:12px" class="row"><button id="go" style="flex:2">⚙️ CAD berechnen</button><button class="ghost" id="save">Einstellungen speichern</button></div>
+<div style="margin-top:12px"><button id="go" style="width:100%">⚙️ CAD berechnen</button></div>
 <div id="bar"><i></i></div><div id="stage">Bereit.</div>
 </div>
 <div>
@@ -130,33 +128,38 @@ function showSTL(url){
 function log(t){const p=$('logs'); if(p.textContent==='—')p.textContent=''; p.textContent+=t+'\n'; p.scrollTop=p.scrollHeight;}
 
 async function loadSettings(){
-  try{const s=await (await fetch('/api/settings')).json();
-    if(s.omnirouter_url)$('omni_url').value=s.omnirouter_url;
+  try{
+    const s=await (await fetch('/api/settings')).json();
     if(s.default_provider)$('provider').value=s.default_provider;
-  }catch(e){}
+    const kb=[];
+    kb.push('OpenRouter-Key: '+(s.openrouter_key_set?'<span class="ok">hinterlegt</span>':'<span class="err">fehlt</span>'));
+    kb.push('OmniRouter-Key: '+(s.omnirouter_key_set?'<span class="ok">hinterlegt</span>':'<span class="err">optional/fehlt</span>'));
+    if(($('provider').value)==='custom')kb.push('Custom-URL: '+(s.custom_url||'<span class="err">fehlt</span>'));
+    $('keybox').innerHTML=kb.join(' · ')+' — <a href="/settings">⚙ Einstellungen</a>';
+    if(s.default_exports){$('e_stl').checked=s.default_exports.includes('stl');$('e_step').checked=s.default_exports.includes('step');$('e_3mf').checked=s.default_exports.includes('3mf');}
+    if(s.default_snapshot===false)$('snap').checked=false;
+    return s;
+  }catch(e){return {};}
 }
 async function loadModels(){
   const p=$('provider').value;
   $('model_hint').textContent='lade…'; $('prov_hint').textContent='';
-  const q=new URLSearchParams({provider:p});
-  if(p==='openrouter'&&$('or_key').value)q.set('api_key',$('or_key').value);
-  if(p==='omnirouter'){if($('omni_url').value)q.set('base_url',$('omni_url').value); if($('omni_key').value)q.set('api_key',$('omni_key').value);}
-  if(p==='custom'&&$('custom_url').value)q.set('base_url',$('custom_url').value);
   try{
-    const r=await fetch('/api/models?'+q.toString()); const j=await r.json();
+    // Keys/URLs kommen serverseitig aus den Einstellungen — hier nur Provider wählen
+    const r=await fetch('/api/models?provider='+encodeURIComponent(p)); const j=await r.json();
     const sel=$('model'); sel.innerHTML='';
     j.models.forEach(m=>{const o=document.createElement('option'); o.value=m.id; o.textContent=m.name||m.id; sel.appendChild(o);});
-    $('model_hint').textContent=j.fallback?'(Fallback-Liste — Key/Gateway prüfen)':`(${j.models.length} Modelle von ${j.base||p})`;
+    const s=await (await fetch('/api/settings')).json();
+    if(s.default_model&&[...sel.options].some(o=>o.value===s.default_model))sel.value=s.default_model;
+    $('model_hint').textContent=j.fallback?'(Fallback-Liste — Keys/Gateway auf der Einstellungsseite prüfen)':`(${j.models.length} Modelle von ${j.base||p})`;
     if(j.hint)$('prov_hint').textContent=j.hint;
   }catch(e){$('model_hint').textContent='Fehler: '+e;}
 }
-async function save(){await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({openrouter_key:$('or_key').value,omnirouter_url:$('omni_url').value||'http://localhost:20128/v1',omnirouter_key:$('omni_key').value,default_provider:$('provider').value,default_model:$('model').value})}); log('Einstellungen gespeichert.');}
-
-$('reload').onclick=loadModels; $('provider').onchange=loadModels; $('save').onclick=save;
+$('reload').onclick=loadModels; $('provider').onchange=async()=>{await loadSettings();loadModels();};
 document.querySelectorAll('[data-ex]').forEach(b=>b.onclick=()=>{$('prompt').value=b.dataset.ex;});
 $('go').onclick=async()=>{
   const ex=[]; if($('e_stl').checked)ex.push('stl'); if($('e_step').checked)ex.push('step'); if($('e_3mf').checked)ex.push('3mf');
-  const body={prompt:$('prompt').value,provider:$('provider').value,model:$('model').value,api_key:$('provider').value==='openrouter'?$('or_key').value:$('omni_key').value,base_url:$('provider').value==='omnirouter'?$('omni_url').value:($('provider').value==='custom'?$('custom_url').value:''),exports:ex,want_snapshot:$('snap').checked};
+  const body={prompt:$('prompt').value,provider:$('provider').value,model:$('model').value,api_key:'',base_url:'',exports:ex,want_snapshot:$('snap').checked};
   if(!body.model){alert('Kein Modell gewählt — erst Modelle laden.');return;}
   $('go').disabled=true; $('dls').innerHTML=''; $('logs').textContent='';
   $('bar').firstElementChild.style.width='2%'; $('stage').textContent='Sende an LLM…';

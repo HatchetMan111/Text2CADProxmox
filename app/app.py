@@ -105,8 +105,12 @@ class Settings(BaseModel):
     openrouter_key: str = ""
     omnirouter_url: str = OMNIROUTER_BASE_DEFAULT
     omnirouter_key: str = ""
+    custom_url: str = ""
+    custom_key: str = ""
     default_provider: str = "openrouter"
     default_model: str = ""
+    default_exports: list[str] = ["stl", "step"]
+    default_snapshot: bool = True
 
 
 class GenerateRequest(BaseModel):
@@ -173,11 +177,12 @@ def resolve_gateway(req: GenerateRequest, settings: dict) -> tuple[str, str]:
         base = (req.base_url or settings.get("omnirouter_url") or OMNIROUTER_BASE_DEFAULT).rstrip("/")
         key = req.api_key or settings.get("omnirouter_key", "") or os.environ.get("OMNIROUTER_API_KEY", "")
         return base, key
-    # custom: OpenAI-kompatibel, URL Pflicht
-    base = (req.base_url or "").rstrip("/")
+    # custom: OpenAI-kompatibel, URL aus Request oder gespeicherten Einstellungen
+    base = (req.base_url or settings.get("custom_url") or "").rstrip("/")
     if not base:
-        raise HTTPException(400, "Für Provider 'custom' wird base_url benötigt (OpenAI-kompatibel, z.B. http://host:11434/v1).")
-    return base, req.api_key or ""
+        raise HTTPException(400, "Für Provider 'custom' wird base_url benötigt — auf der Einstellungsseite (/settings) hinterlegen oder pro Request mitsenden (OpenAI-kompatibel, z.B. http://host:11434/v1).")
+    key = req.api_key or settings.get("custom_key", "") or ""
+    return base, key
 
 
 def extract_code(text: str) -> str:
@@ -215,6 +220,31 @@ def ensure_exports(code: str, exports: list[str]) -> str:
     return code
 
 
+def _message_text(msg: dict) -> str:
+    """Antworttext aus Chat-Completion-Message extrahieren.
+
+    Manche Modelle (v.a. :free-/Reasoning-Modelle auf OpenRouter) liefern
+    content=null und legen den Text in reasoning-Feldern ab; andere liefern
+    Content-Block-Listen (Anthropic-Stil). Alles abdecken, sonst "".
+    """
+    content = msg.get("content")
+    if isinstance(content, list):
+        parts = []
+        for b in content:
+            if isinstance(b, dict) and b.get("type") in ("text", "output_text", "reasoning_text"):
+                parts.append(str(b.get("text", "")))
+            elif isinstance(b, str):
+                parts.append(b)
+        content = "\n".join(p for p in parts if p)
+    if isinstance(content, str) and content.strip():
+        return content
+    for key in ("reasoning", "reasoning_content", "thinking"):
+        val = msg.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+    return ""
+
+
 async def llm_generate(base_url: str, api_key: str, model: str, prompt: str, job: dict) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {"Content-Type": "application/json"}
@@ -242,9 +272,15 @@ async def llm_generate(base_url: str, api_key: str, model: str, prompt: str, job
         raise RuntimeError(f"LLM-Fehler HTTP {r.status_code} bei {url} model={model}:\n{r.text[:4000]}")
     try:
         data = r.json()
-        text = data["choices"][0]["message"]["content"]
+        text = _message_text(data["choices"][0]["message"])
     except Exception as e:
-        raise RuntimeError(f"Unerwartete LLM-Antwort (kein choices[0].message.content):\n{r.text[:4000]}\nFehler: {e}") from e
+        raise RuntimeError(f"Unerwartete LLM-Antwort (kein choices[0].message):\n{r.text[:4000]}\nFehler: {e}") from e
+    if not (text or "").strip():
+        raise RuntimeError(
+            "LLM lieferte leeren Content (content=null — typisch bei Reasoning-/Free-Modellen).\n"
+            f"Volle Antwort:\n{json.dumps(data, indent=2)[:4000]}\n"
+            "Tipp: per Dropdown ein anderes Modell wählen (kein :free-Reasoning-Modell)."
+        )
     return text
 
 
@@ -302,6 +338,8 @@ async def run_job(job_id: str, req_data: dict) -> None:
 
         set_progress(job, 10, f"Frage LLM ({req_data['model']}) …")
         raw = await llm_generate(base, key, req_data["model"], req_data["prompt"], job)
+        if not isinstance(raw, str) or not raw.strip():  # Gürtel+Hosenträger (llm_generate wirft i.d.R. schon)
+            raise RuntimeError("LLM lieferte leere Antwort (None/leer) — siehe vorigen Log + anderes Modell wählen.")
         (d / "llm_raw.md").write_text(raw)
         log(job, f"LLM-Antwort erhalten ({len(raw)} Zeichen). Volltext in llm_raw.md gesichert.")
         job["llm_raw"] = raw[:6000]
@@ -415,9 +453,9 @@ def health():
 @app.get("/api/settings")
 def get_settings():
     s = load_settings()
-    # Key maskiert zurückgeben
+    # Keys maskiert zurückgeben (nie Klartext an den Browser)
     out = dict(s)
-    for k in ("openrouter_key", "omnirouter_key"):
+    for k in ("openrouter_key", "omnirouter_key", "custom_key"):
         if out.get(k):
             out[k + "_set"] = True
             out[k] = ""
@@ -428,8 +466,8 @@ def get_settings():
 def post_settings(s: Settings):
     cur = load_settings()
     data = s.model_dump()
-    # Leere Keys = behalten
-    for k in ("openrouter_key", "omnirouter_key"):
+    # Leere Keys = behalten (Browser sendet Maskiertes nie zurück)
+    for k in ("openrouter_key", "omnirouter_key", "custom_key"):
         if not data[k] and cur.get(k):
             data[k] = cur[k]
     save_settings(data)
@@ -447,10 +485,10 @@ async def list_models(provider: str = "openrouter", base_url: str = "", api_key:
         base = (base_url or settings.get("omnirouter_url") or OMNIROUTER_BASE_DEFAULT).rstrip("/")
         key = api_key or settings.get("omnirouter_key", "") or os.environ.get("OMNIROUTER_API_KEY", "")
     else:
-        base = base_url.rstrip("/")
-        key = api_key
+        base = (base_url or settings.get("custom_url") or "").rstrip("/")
+        key = api_key or settings.get("custom_key", "") or ""
         if not base:
-            return {"models": [], "fallback": True, "hint": "base_url fehlt (Custom = OpenAI-kompatible URL, z.B. http://host:11434/v1)"}
+            return {"models": [], "fallback": True, "hint": "Custom-URL fehlt — auf der Einstellungsseite (/settings) hinterlegen (OpenAI-kompatible URL, z.B. http://host:11434/v1)"}
     headers = {}
     if key:
         headers["Authorization"] = f"Bearer {key}"
@@ -484,8 +522,8 @@ async def list_models(provider: str = "openrouter", base_url: str = "", api_key:
 async def generate(req: GenerateRequest, bg: BackgroundTasks):
     settings = load_settings()
     # Validierung mit kompletter Kette bei Fehlern
-    if req.provider == "custom" and not req.base_url:
-        raise HTTPException(400, "Custom-Provider braucht base_url.")
+    if req.provider == "custom" and not (req.base_url or settings.get("custom_url")):
+        raise HTTPException(400, "Custom-Provider braucht eine Base-URL — auf der Einstellungsseite (/settings) hinterlegen.")
     job_id = uuid.uuid4().hex[:12]
     job = {
         "id": job_id,
@@ -567,6 +605,14 @@ def index():
     if idx.exists():
         return HTMLResponse(idx.read_text())
     return HTMLResponse("<h1>text2CAD</h1><p>static/index.html fehlt.</p>", status_code=500)
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page():
+    idx = STATIC_DIR / "settings.html"
+    if idx.exists():
+        return HTMLResponse(idx.read_text())
+    return HTMLResponse("<h1>text2CAD</h1><p>static/settings.html fehlt.</p>", status_code=500)
 
 
 if __name__ == "__main__":
