@@ -66,13 +66,27 @@ need_pve(){
   msg_ok "Proxmox-Host erkannt: $(pveversion 2>/dev/null | head -n1 || echo unknown)"
 }
 
-ct_exists(){ pct status "$1" >/dev/null 2>&1; }
-hostname_taken(){ pct list 2>/dev/null | awk 'NR>1{print $3}' | grep -qx "$1"; }
+# VMIDs teilen sich EINEN Namensraum fuer LXC *und* QEMU-VMs — darum immer
+# beides pruefen (pct status sieht keine VMs, qm status keine Container).
+guest_exists(){
+  local id="$1"
+  pct status "${id}" >/dev/null 2>&1 && return 0
+  if command -v qm >/dev/null 2>&1; then qm status "${id}" >/dev/null 2>&1 && return 0; fi
+  [[ -e "/etc/pve/lxc/${id}.conf" || -e "/etc/pve/qemu-server/${id}.conf" ]] && return 0
+  return 1
+}
+ct_exists(){ guest_exists "$1"; }  # Alias (Rueckwaertskompatibilitaet)
+hostname_taken(){
+  {
+    pct list 2>/dev/null | awk 'NR>1{print $3}';
+    if command -v qm >/dev/null 2>&1; then qm list 2>/dev/null | awk 'NR>1{print $2}'; fi
+  } | grep -qx "$1"
+}
 
 next_free_id(){
   local id="$1"
   if [[ "${id}" -eq 0 ]]; then id="${CTID_START}"; fi
-  while ct_exists "${id}"; do id=$((id+1)); done
+  while guest_exists "${id}"; do id=$((id+1)); done
   echo "${id}"
 }
 free_hostname(){
@@ -114,8 +128,8 @@ main(){
   need_root; need_pve
 
   local CTID; CTID=$(next_free_id "${CTID_REQ}")
-  if [[ "${CTID_REQ}" != "0" ]] && ct_exists "${CTID_REQ}"; then
-    msg_warn "CT-ID ${CTID_REQ} vergeben — nehme naechste freie: ${CTID}"
+  if [[ "${CTID_REQ}" != "0" ]] && guest_exists "${CTID_REQ}"; then
+    msg_warn "Gast-ID ${CTID_REQ} vergeben (LXC oder VM) — nehme naechste freie: ${CTID}"
   else
     msg_info "CT-ID: ${CTID}"
   fi
@@ -138,22 +152,44 @@ main(){
     NET="${NET},gw=${VAR_GW}"
   fi
 
-  if ! ct_exists "${CTID}"; then
+  if ! pct status "${CTID}" >/dev/null 2>&1; then
+    # Kein Container mit dieser ID — aber evtl. eine VM (gleicher ID-Raum)?
+    while guest_exists "${CTID}"; do
+      msg_warn "ID ${CTID} ist durch eine VM belegt — weiche auf naechste freie ID aus."
+      CTID=$(next_free_id "$((CTID+1))")
+    done
     msg_info "Erstelle LXC ${CTID} (${HN}) …"
-    pct create "${CTID}" "${TPL}" \
-      --hostname "${HN}" \
-      --cores "${VAR_CPU}" --memory "${VAR_RAM}" --swap 512 \
-      --rootfs "${VAR_STORAGE}:${VAR_DISK}" \
-      --net0 "${NET}" \
-      --ostype debian --arch amd64 \
-      --unprivileged "${VAR_UNPRIVILEGED}" --features "nesting=1" \
-      --onboot 1 --start 0 \
-      --tags "${VAR_TAGS}" \
-      --password "$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-16)" || {
-        msg_error "pct create schlug fehl. Voller Befehl oben (bash -x), pct config prüfen."
-        exit 1
-      }
-    msg_ok "Container erstellt."
+    local attempt=0 errf; errf=$(mktemp)
+    while true; do
+      if pct create "${CTID}" "${TPL}" \
+        --hostname "${HN}" \
+        --cores "${VAR_CPU}" --memory "${VAR_RAM}" --swap 512 \
+        --rootfs "${VAR_STORAGE}:${VAR_DISK}" \
+        --net0 "${NET}" \
+        --ostype debian --arch amd64 \
+        --unprivileged "${VAR_UNPRIVILEGED}" --features "nesting=1" \
+        --onboot 1 --start 0 \
+        --tags "${VAR_TAGS}" \
+        --password "$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-16)" 2>"${errf}"; then
+        rm -f "${errf}"
+        break
+      fi
+      if grep -qi "already exists" "${errf}" && [[ ${attempt} -lt 10 ]]; then
+        attempt=$((attempt+1))
+        CTID=$(next_free_id "$((CTID+1))")
+        msg_warn "ID kollidiert (Versuch ${attempt}/10) — versuche ${CTID} …"
+        continue
+      fi
+      msg_error "pct create schlug fehl (CTID ${CTID}). Vollausgabe:"
+      cat "${errf}" >&2; rm -f "${errf}"
+      msg_error "Diagnose (vollstaendig, nicht nur letzte Zeile):"
+      pct status "${CTID}" 2>&1 || true
+      if command -v qm >/dev/null 2>&1; then qm status "${CTID}" 2>&1 || true; fi
+      ls -la "/etc/pve/lxc/${CTID}.conf" "/etc/pve/qemu-server/${CTID}.conf" 2>&1 || true
+      pct config "${CTID}" 2>&1 || true
+      exit 1
+    done
+    msg_ok "Container erstellt (CTID ${CTID})."
   else
     msg_warn "CT ${CTID} existiert bereits — idempotenter Re-Run (kein Neu-Erstellen)."
   fi

@@ -52,9 +52,11 @@ DEBUG=1 bash -x ./install/text2cad.sh
   Web UI:  http://192.168.1.123:8080
 ```
 
-Falls die CT-ID vergeben ist, wählt das Script automatisch die nächste freie
-(`CT-ID 201 vergeben — nehme naechste freie: 202`); ist der Hostname `text2cad`
-belegt, wird `text2cad-2` genommen.
+Falls die CT-ID vergeben ist — egal ob durch einen LXC **oder eine VM**
+(beide teilen sich einen ID-Raum) —, wählt das Script automatisch die nächste
+freie (`Gast-ID 200 vergeben (LXC oder VM) — nehme naechste freie: 201`);
+bleibt auch beim Anlegen eine Kollision, wird bis zu 10× automatisch
+weitergezählt. Ist der Hostname `text2cad` belegt, wird `text2cad-2` genommen.
 
 ## Web-UI benutzen
 
