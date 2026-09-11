@@ -612,7 +612,7 @@ async def list_models(provider: str = "openrouter", base_url: str = "", api_key:
             mid = m.get("id", m.get("name", ""))
             if mid:
                 models.append({"id": mid, "name": m.get("name", mid)})
-        models = sorted(models, key=lambda x: x["id"])[:300]
+        models = sorted(models, key=lambda x: x["id"])  # kein Cap: sonst fallen hintere Bereiche (z.B. z-ai/...) raus
         if not models:
             raise RuntimeError("Leere Modelliste vom Gateway.")
         return {"models": models, "fallback": False, "base": base}
