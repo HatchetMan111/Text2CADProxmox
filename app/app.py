@@ -121,6 +121,7 @@ class GenerateRequest(BaseModel):
     base_url: str = ""
     exports: list[str] = ["stl", "step"]  # subset von stl/step/3mf
     want_snapshot: bool = True
+    parent_job: str = ""  # gesetzt = Änderungsmodus: model.py dieses Jobs als Basis
 
 
 # In-Memory Jobstore (wird zusaetzlich nach jobs/{id}/job.json persistiert)
@@ -245,7 +246,8 @@ def _message_text(msg: dict) -> str:
     return ""
 
 
-async def llm_generate(base_url: str, api_key: str, model: str, prompt: str, job: dict) -> str:
+async def llm_generate(base_url: str, api_key: str, model: str, user_content: str, job: dict) -> str:
+    """user_content ist der fertige User-Prompt (Neu-Erstellung oder Änderungswunsch inkl. Basis-Code)."""
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -257,7 +259,7 @@ async def llm_generate(base_url: str, api_key: str, model: str, prompt: str, job
         "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Erzeuge ein druckbares 3D-Teil (mm) für: {prompt}\nHalte dich strikt an das Ausgabeformat."},
+            {"role": "user", "content": user_content},
         ],
         "temperature": 0.2,
         "max_tokens": 2500,
@@ -324,6 +326,30 @@ def dfam_check(stl_path: Path) -> dict:
     return report
 
 
+def build_user_prompt(prompt: str, parent_job: str, job: dict) -> str:
+    """Neu-Erstellung oder Änderungsmodus (bestehende model.py als Basis, minimal ändern)."""
+    parent = (parent_job or "").strip()
+    if not parent:
+        return f"Erzeuge ein druckbares 3D-Teil (mm) für: {prompt}\nHalte dich strikt an das Ausgabeformat."
+    if ".." in parent or "/" in parent:
+        raise RuntimeError(f"Ungültige parent_job-ID: {parent}")
+    pm = JOBS_DIR / parent / "model.py"
+    if not pm.exists():
+        raise RuntimeError(
+            f"Parent-Job {parent} hat keine model.py — evtl. Job-ID falsch oder der Job ist fehlgeschlagen.\n"
+            f"Geprüfter Pfad: {pm}"
+        )
+    job["parent_job"] = parent
+    base_code = pm.read_text()[:12000]
+    log(job, f"Änderungsmodus: Basis ist model.py aus Job {parent} ({len(base_code)} Zeichen).")
+    return (
+        "Bestehender CAD-Code — ändere NUR den Wunsch unten, alles andere exakt beibehalten:\n"
+        "```python\n" + base_code + "\n```\n"
+        f"Änderungswunsch: {prompt}\n"
+        "Gib das KOMPLETTE geänderte Modell als EINEN ```python-Block zurück (gleiche Decoratoren, mm, FDM-Regeln)."
+    )
+
+
 async def run_job(job_id: str, req_data: dict) -> None:
     job = JOBS[job_id]
     settings = load_settings()
@@ -337,7 +363,8 @@ async def run_job(job_id: str, req_data: dict) -> None:
             log(job, "WARNUNG: kein API-Key gesetzt — versuche anonymer Call; bei 401 bitte Key in Einstellungen hinterlegen.")
 
         set_progress(job, 10, f"Frage LLM ({req_data['model']}) …")
-        raw = await llm_generate(base, key, req_data["model"], req_data["prompt"], job)
+        user_content = build_user_prompt(req_data["prompt"], req_data.get("parent_job", ""), job)
+        raw = await llm_generate(base, key, req_data["model"], user_content, job)
         if not isinstance(raw, str) or not raw.strip():  # Gürtel+Hosenträger (llm_generate wirft i.d.R. schon)
             raise RuntimeError("LLM lieferte leere Antwort (None/leer) — siehe vorigen Log + anderes Modell wählen.")
         (d / "llm_raw.md").write_text(raw)
@@ -531,6 +558,7 @@ async def generate(req: GenerateRequest, bg: BackgroundTasks):
         "provider": req.provider,
         "model": req.model,
         "exports": req.exports,
+        "parent_job": req.parent_job or "",
         "status": "queued",
         "progress": 2,
         "stage": "In Warteschlange",

@@ -66,6 +66,9 @@ weitergezählt. Ist der Hostname `text2cad` belegt, wird `text2cad-2` genommen.
    **Verbindungstest** pro Provider. Keys werden nur serverseitig gespeichert.
 3. Auf **Erstellen**: Provider + **Modell per Dropdown** wählen, Prompt eingeben
    (mm, FDM-gerecht), **CAD berechnen**.
+4. **Bearbeiten**: fertigen Job im Dropdown „Bearbeiten?" wählen, nur den
+   Änderungswunsch beschreiben (z. B. „Bohrung auf 8 mm") — die alte `model.py`
+   dient als Basis, der neue Job verlinkt den Parent.
 4. **Fortschrittsbalken** + Stage-Text + Voll-Logs verfolgen; nach Fertigstellung
    **STL im Viewer drehen/zoomen** und **STL / STEP / 3MF + model.py** herunterladen.
 5. Ohne Key geht die Modelliste in den Fallback-Modus; der Build braucht einen

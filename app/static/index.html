@@ -57,6 +57,8 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--mut)}
 <label>Modell <span class="tag" id="model_hint"></span></label>
 <div class="row"><select id="model" style="flex:3"></select><button class="ghost" id="reload" style="flex:1">↻ Modelle</button></div>
 <div class="kv" id="prov_hint"></div>
+<label>Bearbeiten? <span class="tag">(fertiges Modell als Basis nehmen, Änderung unten beschreiben)</span></label>
+<div class="row"><select id="parent" style="flex:3"><option value="">— Neues Modell —</option></select><button class="ghost" id="reload_parents" style="flex:1">↻ Jobs</button></div>
 <div class="keybox" id="keybox">API-Keys werden auf der <a href="/settings">Einstellungsseite</a> hinterlegt.</div>
 <h3 style="margin-top:18px">2 · Bauteil beschreiben</h3>
 <label>Prompt (mm, FDM-gerecht formulieren)</label>
@@ -155,11 +157,26 @@ async function loadModels(){
     if(j.hint)$('prov_hint').textContent=j.hint;
   }catch(e){$('model_hint').textContent='Fehler: '+e;}
 }
+async function loadParents(){
+  try{
+    const jobs=await (await fetch('/api/jobs')).json();
+    const sel=$('parent'); const cur=sel.value;
+    sel.innerHTML='<option value="">— Neues Modell —</option>';
+    jobs.filter(j=>j.status==='done').forEach(j=>{
+      const o=document.createElement('option'); o.value=j.id;
+      o.textContent=`${j.id} · ${(j.prompt||'').slice(0,50)} (${j.model||'?'})`;
+      sel.appendChild(o);
+    });
+    if([...sel.options].some(o=>o.value===cur))sel.value=cur;
+  }catch(e){}
+}
+$('reload_parents').onclick=loadParents;
+$('parent').onchange=()=>{$('prompt').placeholder=$('parent').value?'z. B. Bohrung auf 8mm vergrössern, Wand auf 5mm verstärken, Höhe +10mm…':'z. B. Handyhalter 80x20x60mm, 15° geneigt, 4mm Wand, Kabelschlitz 12mm, abgerundete Kanten…';};
 $('reload').onclick=loadModels; $('provider').onchange=async()=>{await loadSettings();loadModels();};
 document.querySelectorAll('[data-ex]').forEach(b=>b.onclick=()=>{$('prompt').value=b.dataset.ex;});
 $('go').onclick=async()=>{
   const ex=[]; if($('e_stl').checked)ex.push('stl'); if($('e_step').checked)ex.push('step'); if($('e_3mf').checked)ex.push('3mf');
-  const body={prompt:$('prompt').value,provider:$('provider').value,model:$('model').value,api_key:'',base_url:'',exports:ex,want_snapshot:$('snap').checked};
+  const body={prompt:$('prompt').value,provider:$('provider').value,model:$('model').value,api_key:'',base_url:'',exports:ex,want_snapshot:$('snap').checked,parent_job:$('parent').value||''};
   if(!body.model){alert('Kein Modell gewählt — erst Modelle laden.');return;}
   $('go').disabled=true; $('dls').innerHTML=''; $('logs').textContent='';
   $('bar').firstElementChild.style.width='2%'; $('stage').textContent='Sende an LLM…';
@@ -174,7 +191,8 @@ $('go').onclick=async()=>{
     if(j.status==='done'||j.status==='error'){
       clearInterval(poll); $('go').disabled=false;
       if(j.status==='done'){
-        $('meta').innerHTML=`Fertig: <b>${job_id}</b> · Modell <b>${j.model}</b> · BBox ${j.dfam?.bbox_mm||'—'} mm · watertight: <b>${j.dfam?.watertight??'—'}</b>`;
+        loadParents();
+        $('meta').innerHTML=`Fertig: <b>${job_id}</b>${j.parent_job?` (Änderung von <b>${j.parent_job}</b>)`:''} · Modell <b>${j.model}</b> · BBox ${j.dfam?.bbox_mm||'—'} mm · watertight: <b>${j.dfam?.watertight??'—'}</b>`;
         const d=$('dls'); d.innerHTML='';
         for(const [k,f] of Object.entries(j.files||{})){
           if(k==='png')continue;
@@ -188,7 +206,7 @@ $('go').onclick=async()=>{
     }
   },1200);
 };
-initViewer(); loadSettings().then(loadModels);
+initViewer(); loadSettings().then(loadModels); loadParents();
 </script>
 </body>
 </html>
