@@ -28,7 +28,18 @@ button.danger{background:transparent;border:1px solid var(--err);color:var(--err
 .badge{display:inline-block;border-radius:99px;padding:2px 10px;font-size:12px}
 .badge.done{background:#12341f;color:var(--ok)}.badge.error{background:#3d1512;color:var(--err)}.badge.running{background:#1c2c45;color:var(--acc)}
 .kv{font-size:13px;color:var(--mut)}
+button.view3d{background:transparent;border:1px solid var(--acc);color:var(--acc)}
+.modal{position:fixed;inset:0;background:rgba(3,5,9,.82);display:none;align-items:center;justify-content:center;z-index:50;padding:18px}
+.modal.open{display:flex}
+.modal .panel{background:var(--card);border:1px solid var(--line);border-radius:12px;width:min(900px,96vw);padding:14px}
+.modal .head{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.modal .head .t{flex:1;font-weight:600}
+#viewer{width:100%;height:min(62vh,560px);background:#0d1016;border:1px solid var(--line);border-radius:8px;display:block}
+.modal .foot{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 </style>
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}
+</script>
 </head>
 <body>
 <header>
@@ -62,14 +73,19 @@ function render(){
     let dls='';
     for(const [k,f] of Object.entries(files)){if(k==='png')continue; dls+=`<a href="/download/${j.id}/${f}" download="${f}">⬇ ${esc(f)}</a>`;}
     dls+=`<a href="/download/${j.id}/model.py">⬇ model.py</a>`;
+    const viewBtn=files.stl?`<button class="view3d" data-view="${j.id}">🔍 3D-Ansicht</button>`:'';
     const dfam=j.dfam&&j.dfam.bbox_mm?`BBox ${j.dfam.bbox_mm} mm · watertight: ${j.dfam.watertight??'—'}`:'';
     d.innerHTML=`${img}
       <div class="prompt">${esc(j.prompt||'(ohne Prompt)')}</div>
       <div class="meta"><span class="badge ${badge}">${j.status}</span> <b>${esc(j.id)}</b> · ${esc(j.created_at||'').slice(0,16).replace('T',' ')}${j.parent_job?` · Änderung von <b>${esc(j.parent_job)}</b>`:''}</div>
       <div class="meta">${esc(j.provider||'')} / ${esc(j.model||'')} ${dfam?'· '+esc(dfam):''}</div>
       <div class="dl">${dls}</div>
-      <div class="dl"><button class="danger" data-del="${j.id}">🗑 Löschen</button></div>`;
+      <div class="dl">${viewBtn}<button class="danger" data-del="${j.id}">🗑 Löschen</button></div>`;
     g.appendChild(d);
+  });
+  g.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{
+    const j=all.find(x=>x.id===b.dataset.view);
+    if(j&&window.openViewer&&j.files&&j.files.stl)window.openViewer(j.id,j.files.stl,j.prompt||j.id);
   });
   g.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{
     if(!confirm(`Job ${b.dataset.del} inkl. aller Dateien löschen?`))return;
@@ -87,6 +103,80 @@ async function load(){
 $('q').addEventListener('input',render);
 $('reload').onclick=load;
 load();
+</script>
+<div class="modal" id="vmodal">
+  <div class="panel">
+    <div class="head"><div class="t" id="vtitle">3D-Ansicht</div><button class="ghost" id="vclose">✕ Schliessen</button></div>
+    <div id="viewer"></div>
+    <div class="foot">
+      <button class="ghost" id="vspin">⏸ Drehen</button>
+      <button class="ghost" id="vwire">Drahtgitter</button>
+      <span class="kv" id="vinfo"></span>
+    </div>
+  </div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {STLLoader} from 'three/addons/loaders/STLLoader.js';
+
+let scene, camera, renderer, controls, mesh=null, spin=false;
+function ensureViewer(){
+  if(renderer) return;
+  const el=document.getElementById('viewer');
+  scene=new THREE.Scene(); scene.background=new THREE.Color(0x0d1016);
+  camera=new THREE.PerspectiveCamera(45, el.clientWidth/Math.max(el.clientHeight,1), .1, 100000);
+  camera.position.set(120,120,120);
+  renderer=new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(el.clientWidth, el.clientHeight);
+  el.appendChild(renderer.domElement);
+  controls=new OrbitControls(camera, renderer.domElement);
+  scene.add(new THREE.HemisphereLight(0xffffff,0x223344,1.1));
+  const d=new THREE.DirectionalLight(0xffffff,.9); d.position.set(200,200,200); scene.add(d);
+  scene.add(new THREE.GridHelper(200,20,0x2a3140,0x1a2030));
+  (function anim(){
+    requestAnimationFrame(anim);
+    if(spin&&mesh) mesh.rotation.z+=0.01;
+    controls.update();
+    renderer.render(scene,camera);
+  })();
+  window.addEventListener('resize',()=>{
+    const w=el.clientWidth||1, h=el.clientHeight||1;
+    renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix();
+  });
+}
+function closeViewer(){
+  spin=false;
+  const btn=document.getElementById('vspin'); if(btn)btn.textContent='⏸ Drehen';
+  document.getElementById('vmodal').classList.remove('open');
+}
+function fitCamera(size){
+  const m=Math.max(size.x,size.y,size.z)||100;
+  camera.position.set(m,m,m); camera.near=m/100; camera.far=m*100; camera.updateProjectionMatrix();
+  controls.target.set(0,0,0); controls.update();
+}
+window.openViewer=(jobId,fname,title)=>{
+  document.getElementById('vtitle').textContent='3D-Ansicht — '+title;
+  document.getElementById('vinfo').textContent='Lade '+fname+' ...';
+  document.getElementById('vmodal').classList.add('open');
+  ensureViewer();
+  const url='/download/'+encodeURIComponent(jobId)+'/'+encodeURIComponent(fname);
+  new STLLoader().load(url, geo=>{
+    geo.computeVertexNormals(); geo.center();
+    if(mesh){scene.remove(mesh); mesh.geometry.dispose(); mesh.material.dispose();}
+    mesh=new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color:0x4da3ff, metalness:.15, roughness:.55}));
+    scene.add(mesh);
+    const box=new THREE.Box3().setFromObject(mesh); const s=box.getSize(new THREE.Vector3());
+    fitCamera(s);
+    document.getElementById('vinfo').textContent=`${s.x.toFixed(1)} × ${s.y.toFixed(1)} × ${s.z.toFixed(1)} mm · ${geo.attributes.position.count/3|0} Dreiecke`;
+    requestAnimationFrame(()=>{const el=document.getElementById('viewer'); renderer.setSize(el.clientWidth||1, el.clientHeight||1); camera.aspect=(el.clientWidth||1)/Math.max(el.clientHeight,1); camera.updateProjectionMatrix();});
+  }, undefined, ()=>{document.getElementById('vinfo').innerHTML='<span class="err">STL konnte nicht geladen werden.</span>';});
+};
+document.getElementById('vclose').onclick=closeViewer;
+document.getElementById('vmodal').addEventListener('click',e=>{if(e.target.id==='vmodal')closeViewer();});
+document.getElementById('vspin').onclick=e=>{spin=!spin; e.target.textContent=spin?'⏸ Drehen':'▶ Drehen';};
+document.getElementById('vwire').onclick=()=>{if(mesh){mesh.material.wireframe=!mesh.material.wireframe;}};
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeViewer();});
 </script>
 </body>
 </html>
