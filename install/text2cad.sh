@@ -234,9 +234,22 @@ fi
 cp -r /opt/text2cad-src/app/* /opt/text2cad/app/
 cp /opt/text2cad-src/systemd/text2cad.service /etc/systemd/system/text2cad.service
 sed -i "s/--port 8080/--port \${APP_PORT}/; s/:8080/:\${APP_PORT}/" /etc/systemd/system/text2cad.service || true
-if [[ ! -d /opt/text2cad/.venv ]]; then python3 -m venv /opt/text2cad/.venv; fi
-/opt/text2cad/.venv/bin/pip install --upgrade pip wheel
-/opt/text2cad/.venv/bin/pip install -r /opt/text2cad/app/requirements.txt
+REQ_HASH=$(sha256sum /opt/text2cad/app/requirements.txt | awk '{print $1}')
+if [[ ! -d /opt/text2cad/.venv || ! -f /opt/text2cad/.venv.reqhash || "$(cat /opt/text2cad/.venv.reqhash 2>/dev/null)" != "${REQ_HASH}" ]]; then
+  echo "[CT] Baue Python-venv (neu/frisch, Hash ${REQ_HASH:0:12}…) — alte OCP-Mischungen werden restlos entfernt."
+  rm -rf /opt/text2cad/.venv
+  python3 -m venv /opt/text2cad/.venv
+  /opt/text2cad/.venv/bin/pip install --upgrade pip wheel
+  /opt/text2cad/.venv/bin/pip install -r /opt/text2cad/app/requirements.txt
+  echo "${REQ_HASH}" > /opt/text2cad/.venv.reqhash
+else
+  echo "[CT] venv aktuell (Requirements unverändert) — kein Neuaufbau."
+fi
+# CAD-Smoke-Test: faengt kaputte OCP-Umgebungen SOFORT mit voller Kette ab (statt erst beim ersten Modell)
+echo "[CT] CAD-Smoke-Test (OCP-Kernel + build123d) …"
+/opt/text2cad/.venv/bin/python -c "from cadgen import build123d as bd; v=bd.Box(10,10,10).volume; assert abs(v-1000)<1e-6, v; print('CAD-SMOKE OK, Box-Volumen:', v)" || {
+  echo "[CT] FEHLER: CAD-Smoke-Test fehlgeschlagen. Installierte OCP-Pakete:"; /opt/text2cad/.venv/bin/pip list 2>/dev/null | grep -iE 'ocp|gordon|build123d|cadgen|vtk' || true; exit 1
+}
 # Playwright-Chromium fuer PNG-Snapshots (optional, kein Hard-Fail)
 /opt/text2cad/.venv/bin/python -m playwright install --with-deps chromium || echo "[CT] WARN: Playwright/Chromium fehlt — PNG-Snapshot deaktiviert, STL-Viewer geht trotzdem."
 touch /opt/text2cad/.env

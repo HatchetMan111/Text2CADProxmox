@@ -3,11 +3,14 @@ uvicorn[standard]==0.30.*
 httpx==0.27.*
 pydantic==2.*
 python-multipart==0.0.9
-# CAD-Stack aus earthtojake/text-to-cad (Skill: cad)
+# CAD-Stack aus earthtojake/text-to-cad (Skill: cad).
+# WICHTIG: build123d 0.10 hat einen Upstream-Bug (ocp_gordon ohne Obergrenze ->
+# OCP-7.8/8.0-Mischung, "No module named 'OCP.collections'"). 0.11 pinnt
+# konsistent (cadquery-ocp-novtk>=7.9 + ocp_gordon<0.3) — darum 0.11er-Zweig.
 cadgen[snapshot]==0.5.1
-build123d==0.10.*
+build123d==0.11.*
 # DfAM / Mesh-Checks (3D-Druck-Optimierung)
 trimesh==4.*
-numpy>=2,<3  # build123d 0.10 braucht numpy>=2 (kein 1.x-Pin!)
+numpy>=2,<3  # build123d braucht numpy>=2 (kein 1.x-Pin!)
 # Snapshot-Fallback braucht Playwright nur optional:
 # python -m playwright install chromium  (wird im Installer versucht, kein Hard-Fail)
