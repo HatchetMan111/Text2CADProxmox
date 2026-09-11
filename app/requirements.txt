@@ -8,6 +8,6 @@ cadgen[snapshot]==0.5.1
 build123d==0.10.*
 # DfAM / Mesh-Checks (3D-Druck-Optimierung)
 trimesh==4.*
-numpy==1.26.*
+numpy>=2,<3  # build123d 0.10 braucht numpy>=2 (kein 1.x-Pin!)
 # Snapshot-Fallback braucht Playwright nur optional:
 # python -m playwright install chromium  (wird im Installer versucht, kein Hard-Fail)
