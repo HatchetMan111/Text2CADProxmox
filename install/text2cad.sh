@@ -218,6 +218,13 @@ apt-get install -y --no-install-recommends python3 python3-venv python3-pip git 
   echo "[CT] WARN: OCCT-Libs z.T. fehlend — versuche ohne Versions-Pin"
   apt-get install -y --no-install-recommends python3 python3-venv python3-pip git curl ca-certificates iproute2 libgl1 libglib2.0-0 || exit 1
 }
+# Node.js >=20: cadgen baut DXF-/Mesh-Exporte (STL/3MF) in Node (Fehler NodeUnavailable ohne dies)
+if ! command -v node >/dev/null 2>&1 || [[ "\$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -lt 20 ]]; then
+  echo "[CT] Installiere Node.js 22 LTS (fuer cadgen Mesh-Exporte) …"
+  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  apt-get install -y nodejs
+fi
+node --version && echo "[CT] Node OK."
 mkdir -p /opt/text2cad/app /opt/text2cad/data
 if [[ -d /opt/text2cad-src/.git ]]; then
   echo "[CT] Update bestehendes Repo …"

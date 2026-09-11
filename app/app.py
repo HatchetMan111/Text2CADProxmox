@@ -314,6 +314,21 @@ def run_build(d: Path, timeout: int = 240) -> tuple[int, str, str]:
         return 124, out or "", err
 
 
+def env_error_hint(err: str) -> str:
+    """Erkennt Umgebungsfehler (kein Code-Problem) — dafür ist LLM-Repair sinnlos, Fail-fast mit Aktion."""
+    e = err or ""
+    if "NodeUnavailable" in e or "node was not found on PATH" in e or "CADGEN_NODE" in e:
+        return ("UMGEBUNGSFEHLER (kein LLM-Repair versucht): cadgen braucht Node.js ≥20 für Mesh-Exporte (STL/3MF). "
+                "Loesung: Installer-Einzeiler erneut laufen lassen — er installiert Node automatisch, danach Job neu starten.")
+    if "ModuleNotFoundError" in e or "ImportError" in e:
+        return ("UMGEBUNGSFEHLER (kein LLM-Repair versucht): Python-Paket fehlt im Container-venv. "
+                "Loesung: Installer-Einzeiler erneut laufen lassen (venv wird neu gebaut), danach Job neu starten.")
+    if "playwright" in e.lower() and "executable" in e.lower():
+        return ("UMGEBUNGSFEHLER: Playwright-Browser fehlt — nur der PNG-Snapshot betroffen, STL-Download geht trotzdem. "
+                "Loesung: Installer erneut laufen lassen.")
+    return ""
+
+
 def build_repair_prompt(code: str, err: str) -> str:
     tail = (err or "")[-3500:]
     return (
@@ -429,6 +444,9 @@ async def run_job(job_id: str, req_data: dict) -> None:
                 break
             if rc == 124:
                 raise RuntimeError(f"CAD-Build Timeout (Versuch {attempt}).\nVOLLSTDOUT:\n{out}\nVOLLSTDERR:\n{err}")
+            hint = env_error_hint(err)
+            if hint:
+                raise RuntimeError(f"{hint}\nVOLLSTDOUT:\n{out}\nVOLLSTDERR:\n{err}")
             if attempt >= max_attempts:
                 break
             log(job, f"Versuch {attempt}/{max_attempts} fehlgeschlagen — frage LLM nach Reparatur (Fehler-Feedback) …")
