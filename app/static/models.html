@@ -25,6 +25,7 @@ button.danger{background:transparent;border:1px solid var(--err);color:var(--err
 .meta{font-size:12px;color:var(--mut)}
 .dl{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .dl a{border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:var(--txt);text-decoration:none;font-size:13px}
+.dl a.editbtn{border:1px solid var(--acc);color:var(--acc)}
 .badge{display:inline-block;border-radius:99px;padding:2px 10px;font-size:12px}
 .badge.done{background:#12341f;color:var(--ok)}.badge.error{background:#3d1512;color:var(--err)}.badge.running{background:#1c2c45;color:var(--acc)}
 .kv{font-size:13px;color:var(--mut)}
@@ -74,13 +75,14 @@ function render(){
     for(const [k,f] of Object.entries(files)){if(k==='png')continue; dls+=`<a href="/download/${j.id}/${f}" download="${f}">⬇ ${esc(f)}</a>`;}
     dls+=`<a href="/download/${j.id}/model.py">⬇ model.py</a>`;
     const viewBtn=files.stl?`<button class="view3d" data-view="${j.id}">🔍 3D-Ansicht</button>`:'';
+    const editBtn=j.status==='done'?`<a class="editbtn" href="/?edit=${encodeURIComponent(j.id)}">✏️ Nacharbeiten</a>`:'';
     const dfam=j.dfam&&j.dfam.bbox_mm?`BBox ${j.dfam.bbox_mm} mm · watertight: ${j.dfam.watertight??'—'}`:'';
     d.innerHTML=`${img}
       <div class="prompt">${esc(j.prompt||'(ohne Prompt)')}</div>
       <div class="meta"><span class="badge ${badge}">${j.status}</span> <b>${esc(j.id)}</b> · ${esc(j.created_at||'').slice(0,16).replace('T',' ')}${j.parent_job?` · Änderung von <b>${esc(j.parent_job)}</b>`:''}</div>
       <div class="meta">${esc(j.provider||'')} / ${esc(j.model||'')} ${dfam?'· '+esc(dfam):''}</div>
       <div class="dl">${dls}</div>
-      <div class="dl">${viewBtn}<button class="danger" data-del="${j.id}">🗑 Löschen</button></div>`;
+      <div class="dl">${viewBtn}${editBtn}<button class="danger" data-del="${j.id}">🗑 Löschen</button></div>`;
     g.appendChild(d);
   });
   g.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{

@@ -240,7 +240,21 @@ $('go').onclick=async()=>{
     }
   },1200);
 };
-initViewer(); loadSettings().then(loadModels); loadParents();
+async function initEditMode(){
+  const id=new URLSearchParams(location.search).get('edit');
+  if(!id) return;
+  await loadParents();
+  const sel=$('parent');
+  if([...sel.options].some(o=>o.value===id)){
+    sel.value=id;
+    sel.dispatchEvent(new Event('change'));
+    $('stage').textContent='Nacharbeiten von Job '+id+' — Änderungswunsch unten beschreiben, dann „CAD berechnen“.';
+    $('prompt').focus();
+  } else {
+    $('stage').textContent='Job '+id+' nicht als Basis gefunden (evtl. gelöscht).';
+  }
+}
+initViewer(); loadSettings().then(loadModels); initEditMode();
 </script>
 </body>
 </html>
